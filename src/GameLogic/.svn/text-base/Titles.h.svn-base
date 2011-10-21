@@ -1,0 +1,73 @@
+
+
+#ifndef TITLES_H
+#define TITLES_H
+
+#include "SDL/SDL.h"
+
+//headers for texture handling
+#include "FileUtils.h"
+#include "Filenames.h"
+#include "TextureLibrary.h"
+#include <string>
+#include <iostream>
+using std::string;
+using std::cout;
+using std::endl;
+
+
+typedef struct button {
+	float x,y,  //top-left corner (screen fractions)
+	      dx,dy;//width and height (screen fractions)
+	bool state; //on or off
+} button;
+
+enum button_names {bNULL, bTitle_Newgame, bTitle_Options, bTitle_Quit,
+                          bPause_Resume,  bPause_Quit};
+enum title_state {TITLE_SCREEN, PAUSE_OVERLAY};
+
+class Titles {
+	
+public:	
+	Titles(); //constructor
+	~Titles(); //destructor
+	void drawTitleScreen();
+	void checkTitleEvents(int *request);
+	void drawLevelLoadingScreen(int levelnum);
+	void drawLevelFadeInOverlay(float alpha);
+	void drawPauseOverlay();
+	void checkPauseEvents(int *request);
+	void drawPlayerShotOverlay();
+	void drawGameOverOverlay();
+	void drawHSFailedOverlay();
+	void LoadTitlesTextures();
+	
+private:
+	
+	//title screen buttons
+	button title_newgame;
+	button title_options;
+	button title_quit;
+	//pause overlay buttons
+	button pause_resume;
+	button pause_quit;
+	
+	enum button_names selected_button;
+	void Mouse_motion(title_state ts);
+	button_names Mouse_button(title_state ts);
+	bool checkbutton(button *aButton, float mouse_x, float mouse_y);
+	void drawButton(button *aButton);
+
+	int viewdims[2];
+	float oncolor[3], offcolor[3];
+	SDL_Surface *image;
+	GLuint texture;
+	SDL_Event event;
+
+	//textures
+	Texture *mTexture_buttonOn;
+	Texture *mTexture_buttonOff;
+		
+};
+
+#endif //TITLES_H

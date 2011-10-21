@@ -1,0 +1,144 @@
+
+#include "Game.h"
+#include "Controls.h"
+
+#define AUTO_FIRE_INTERVAL 0.2  //seconds between each bullet during automatic fire
+
+SDL_Event event;
+
+Controls::Controls() :  
+goForward(false), 
+goBack(false), 
+goLeft(false), 
+goRight(false),
+leftbutton(DOWN),
+NEW_BURST(true)
+{}
+
+
+UserAction Controls::checkUserInput(Player *pPlayer, level_status ls)
+{		
+	enum UserAction action;
+	int num_keys;
+	Uint8 *key_states = SDL_GetKeyState(&num_keys);
+	
+	SDL_PumpEvents();
+	
+	if(key_states)
+	{
+		switch (ls) 
+		{			
+			case LEVEL_INPROGRESS:
+				
+				if ( goLeft    = (bool)key_states[SDLK_a] ) pPlayer->GoLeft();
+				if ( goRight   = (bool)key_states[SDLK_d] ) pPlayer->GoRight();
+				if ( goForward = (bool)key_states[SDLK_w] ) pPlayer->GoForward();
+				if ( goBack    = (bool)key_states[SDLK_s] ) pPlayer->GoBackward();
+				break;
+				
+			case LEVEL_HYPERSPACE:
+				
+				pPlayer->GoForward_HS(); //forward motion mandatory in hyperspace!
+				if ( goLeft    = (bool)key_states[SDLK_a] ) pPlayer->GoLeft_HS();
+				if ( goRight   = (bool)key_states[SDLK_d] ) pPlayer->GoRight_HS();					
+				break;
+				
+			default:
+				printf("error: incorrect level status in Controls, %d\n",ls);
+				exit(1);
+				break;
+		}
+	}
+	
+	action = NOACTION;
+			
+	while ( SDL_PollEvent (&event) ) 
+	{
+		switch (event.type) {			
+			
+			case SDL_MOUSEMOTION:
+				Look(pPlayer);
+				break;
+				
+			case SDL_MOUSEBUTTONDOWN:
+				leftbutton = DOWN;
+				break;
+				
+			case SDL_MOUSEBUTTONUP:
+				leftbutton = UP;
+				NEW_BURST = true;
+				break;
+				
+			case SDL_KEYDOWN:	
+				
+				if (event.key.keysym.sym==SDLK_ESCAPE)
+					action = PAUSE;		
+				break;
+				
+			default:
+				break;
+		}
+	}	
+	
+	//automatic fire
+	if (leftbutton && ls != LEVEL_HYPERSPACE)
+		if (automaticFire.time()>AUTO_FIRE_INTERVAL || NEW_BURST)
+		{		
+			NEW_BURST = false;
+			automaticFire.start();		
+			Fire(pPlayer);
+		};
+	
+	return action;
+}
+
+
+void Controls::Look(Player *pPlayer)
+{
+	int mouse_dx, mouse_dy;
+	float dAngle, dAzimuth;
+	
+	int MAX_MOUSE_MOTION = 40;
+	
+	(Uint8)SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);	
+	
+	if (mouse_dx>MAX_MOUSE_MOTION)
+		mouse_dx = MAX_MOUSE_MOTION;
+	else if (mouse_dx<-MAX_MOUSE_MOTION) 
+		mouse_dx = -MAX_MOUSE_MOTION;
+	
+	if (mouse_dy>MAX_MOUSE_MOTION) 
+		mouse_dy = MAX_MOUSE_MOTION;
+	else if (mouse_dy<-MAX_MOUSE_MOTION) 
+		mouse_dy = -MAX_MOUSE_MOTION;
+	
+	//mouse sensitivity is currently hard-coded..
+	dAngle   = -5.e-4f * 2.0*M_PI*(float)mouse_dx;	
+	dAzimuth = -5.e-4f * 2.0*M_PI*(float)mouse_dy;	
+	
+	pPlayer->RotateAboutVertical(dAngle);	
+	pPlayer->RotateAboutHorizontal(dAzimuth);			
+	
+}
+
+void Controls::Fire(Player *pPlayer)
+{	
+	Uint8 result = SDL_GetRelativeMouseState(NULL,NULL);	
+	if (result&SDL_BUTTON(1))
+	{
+		leftbutton = DOWN;
+		World *pWorld = Game::getWorld();
+		pWorld->createPlayerBullet(pPlayer->GetViewPoint(),
+								   pPlayer->GetVelocity(),
+								   pPlayer->GetViewDirection());		
+	}
+}
+
+void Controls::PauseTimers()
+{
+	automaticFire.pause();
+}
+void Controls::UnpauseTimers()
+{
+	automaticFire.unpause();
+}

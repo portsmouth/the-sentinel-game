@@ -1,0 +1,94 @@
+TO DO
+-----
+
+* Hyperspace
+
+* Player tree creation
+
+* Sentinel tree creation
+
+* Sentries:
+
+	- superclass of Sentinel?
+	- model
+	
+* Meanies:
+
+	- code
+	- model
+
+* Better tree model.
+
+* Better flat square texture
+
+* Better box textures, maybe multi-resolution/colors
+
+* Boulder raycasting:
+
+	- put AABBs in Kd tree
+	
+* code entry menus, with rotating landscape displayed.
+
+* billboards (cylindrical) for sentinel absorbing beam
+
+* Icons for HUD (synthoid shells, trees, boulders). Sentinel absorbing indicator
+
+* Cool title screen(s), taking after the original one.
+
+* Better indication of selected square (currently just a placeholder really).
+
+
+
++---------------------------------------------------------+
++ Timing statistics                                       +
++---------------------------------------------------------+
+
+Modify FPS calculator to print the period of other quantities, with macro calls 
+like TIMER(rendering), TIMER(raycasting), and probably matching timer end calls 
+TIMER_END(rendering).
+
+These could be smart enough to know if a given timer is contained in another, 
+e.g. the number of ms reported by TIMER(terrain_rendering) is some fraction of 
+the number reported for rendering in total TIMER(rendering). The reported times 
+could be displayed nested.
+
+Probably overlapping timers should be disallowed to avoid confusion, i.e. if TIMER(B) is 
+called after TIMER(A) but before TIMER_END(A), TIMER_END(B) must come before TIMER_END(A).
+
+TIMER(A)  ...  TIMER(B) ..... TIMER_END(B) .... TIMER_END(A)
+
+Not:
+
+TIMER(A)  ...  TIMER(B) ..... TIMER_END(A) .... TIMER_END(B)
+
+The latter should generate a warning.
+
+The printout will be something like:
+
+rendering: 10
++- terrain: 4
+   mesh: 6
+   +- boulder: 3 
+      tree: 3
+sentinel: 5  
++- raycasting: 5
+   +- player: 3
+      tree: 2
+   
+It might be convenient if, as above,  the timer names need only be unique in the 
+current branch (i.e. as long as no parent has that name).
+
+
++---------------------------------------------------------+
++ Particle system                                         +
++---------------------------------------------------------+
+
+Would be nice to play around with this. Maybe a flock of birds flying around?
+Timers will be useful here to make sure the cost is small.
+
+
+
+
+
+
+

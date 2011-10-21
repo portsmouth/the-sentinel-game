@@ -1,0 +1,111 @@
+
+
+#ifndef GEOMETRY_H
+#define GEOMETRY_H
+
+#include <OpenGL/OpenGL.h>
+#include <OpenGL/gl.h>
+#include <OpenGL/glu.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <assert.h>
+
+#include "memory.h"
+
+#define TINY_VAL 1.0e-6
+
+/* geometry pre-computation */
+extern float *sa, *ca, *sa_HS, *ca_HS;
+extern void gen_cylinder_lookup_tables(int min_lod, int max_lod);
+extern void free_cylinder_lookup_tables(int min_lod, int max_lod);
+extern void gen_cylinder_lookup_tables_HS(int min_lod, int max_lod);
+extern void free_cylinder_lookup_tables_HS(int min_lod, int max_lod);
+
+/**********************************************************************/
+/*                          draw routines                             */
+/**********************************************************************/
+
+extern void drawtriangle(float *v[], float *n[], float *t[]);
+extern void gltDrawSphere(GLfloat *pos, GLfloat fRadius, GLint iSlices, GLint iStacks);
+extern void drawCylinder (GLfloat *pos, float l, float r, float zoffset, int lod, int min_lod, float wraptex_x, float wraptex_z);
+extern void drawCone (GLfloat *pos, float l, float theta, float *rotaxis, float r, int N_lod, int orient);
+
+/**********************************************************************/
+/*                  math routines (inline)                            */
+/**********************************************************************/
+
+inline float scalarprod(float v1[3], float v2[3])
+{
+	return v1[0]*v2[0]+v1[1]*v2[1]+v1[2]*v2[2];
+}
+
+inline float scalarprod2d(float v1[2], float v2[2])
+{
+	return v1[0]*v2[0]+v1[1]*v2[1];
+}
+
+inline void normalize(float v[3])
+{
+	float d = (float)sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+	
+	assert(d != 0.0);
+	
+	if (d==0.0) {
+		printf("ERROR: attempted to normalize a null vector\n");
+		d=TINY_VAL;
+	}
+	v[0] /= d;
+    v[1] /= d;
+    v[2] /= d;		
+}
+
+inline void crossprod(float v1[3], float v2[3], float out[3])
+{
+	out[0] = v1[1]*v2[2]-v1[2]*v2[1];
+	out[1] = v1[2]*v2[0]-v1[0]*v2[2];
+	out[2] = v1[0]*v2[1]-v1[1]*v2[0];
+}
+
+inline void normcrossprod(float v1[3], float v2[3], float out[3])
+{
+	out[0] = v1[1]*v2[2]-v1[2]*v2[1];
+	out[1] = v1[2]*v2[0]-v1[0]*v2[2];
+	out[2] = v1[0]*v2[1]-v1[1]*v2[0];
+	if (out[0] != 0.0 || out[1] != 0.0 || out[2] != 0.0)
+		normalize(out);
+}
+
+inline void normalize2d(float v[2])
+{
+	float d = (float)sqrt(v[0]*v[0]+v[1]*v[1]);
+	if (d==0.0) {
+		printf("ERROR: attempted to normalize a null 2d vector\n");
+		d=TINY_VAL;
+	}
+	v[0] /= d;
+	v[1] /= d;
+}
+
+inline float magnitude(float v[3])
+{
+	return (float)sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+}
+inline float sqrmagnitude(float v[3])
+{
+	return (float)(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]);
+}
+inline float magnitude2d(float v[2])
+{
+	return (float)sqrt(v[0]*v[0]+v[1]*v[1]);
+}
+inline float sqrmagnitude2d(float v[2])
+{
+	return (float)(v[0]*v[0]+v[1]*v[1]);
+}
+
+
+
+
+#endif //GEOMETRY_H

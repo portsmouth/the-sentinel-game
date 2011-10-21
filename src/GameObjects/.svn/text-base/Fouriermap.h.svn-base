@@ -1,0 +1,33 @@
+
+/* make a periodic 2d height map with Fourier method */
+
+#ifndef FOURIERMAP_H
+#define FOURIERMAP_H
+
+class Fouriermap {
+	
+public:	
+	
+	Fouriermap(long mSeed, int mN, float mL,
+			   float mAmp, float mNp, int mKtrunc); //constructor
+
+	~Fouriermap(); //destructor
+	float interpolate(float x, float y);
+	
+private:
+	void make_FTheightmap();
+	void makeFT(int i, int j, int k);
+	float getAmp(int k);
+	inline void wrap(float *x, float L);
+	float *Power;
+	
+	float **H, **Hreal, **Himag;
+	long seed;
+	int Ngrid;
+	float L;
+	float Amp, np;
+	int ktrunc;
+};
+
+#endif //FOURIERMAP_H
+

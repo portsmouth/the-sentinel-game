@@ -1,0 +1,12 @@
+# Blender3D MTL File: synthoid.blend
+# Material Count: 1
+newmtl 01_-_Default
+Ns 27.450980
+Ka 0.000000 0.000000 0.000000
+Kd 0.800000 0.800000 0.480000
+Ks 0.450000 0.450000 0.450000
+Ni 1.000000
+d 1.000000
+illum 2
+
+

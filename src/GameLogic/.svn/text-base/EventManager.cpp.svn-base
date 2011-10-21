@@ -1,0 +1,243 @@
+
+#include "SDLview.h"
+#include "Game.h"
+#include "Bullet.h"
+#include "EventManager.h"
+
+//#define EVENTMANAGER_DEBUG_OUTPUT
+
+/* scoring */
+const int ENEMY_KILL_POINTS = 10;
+const int LEVEL_ADVANCE_POINTS = 20;
+
+
+EventManager::EventManager() //constructor
+{}
+
+EventManager::~EventManager() //destructor	
+{}
+
+/* setup game state at the beginning of each level */
+void EventManager::setup()
+{
+	pWorld = Game::getWorld();
+	PLAYER_BULLET_LIFETIME = pWorld->GetBulletLifetime(PLAYER_BULLET);
+	ENEMY_BULLET_LIFETIME  = pWorld->GetBulletLifetime(ENEMY_BULLET);
+
+	pPlayer = Game::getPlayer();
+	pEnemy = &(pWorld->enemy);
+	pEnemy->Activate();
+}
+
+/* do a game update and return the updated player, enemy and level statuses */
+void EventManager::doActive(Player_States *ps, 
+							Enemy_States *es, 
+							level_status *ls)
+{	
+	dealWithPlayer(ps,ls);
+	dealWithEnemy(es,ls);	
+	dealWithPlayerBullets();
+	dealWithEnemyBullets();
+	
+	*ps = pPlayer->GetState();
+	*es = pEnemy ->GetState();
+}
+
+void EventManager::dealWithPlayer(Player_States *ps, level_status *ls)
+{	
+	*ps = pPlayer->GetState();
+	
+	switch (*ps) 
+	{
+		//normal in-level play
+		case PLAYER_ACTIVE: 
+			pPlayer->Move();
+			break;
+
+		//player has been shot and is waiting to respawn
+		case PLAYER_RESPAWNING: 
+			pPlayer->TrytoRespawn();
+			break;
+			
+		//player has been killed
+		case PLAYER_KILLED: 
+			if (pPlayer->FinishedDying()) 
+				*ls = LEVEL_GAMEOVER;
+			break;
+			
+		//normal play in hyperspace
+		case PLAYER_HS_ACTIVE: 
+			bool killed = pPlayer->Move_HS();
+			if (killed) 
+				pPlayer->kill_HS();
+			break;
+						
+		//player failed hyperspace and is waiting to return to the former level
+		case PLAYER_HS_FAILED: 
+			if (pPlayer->FinishedFailingHS())	
+			{
+				Portal *pPortal = Game::getPortal();
+				pPortal->Close();
+				pWorld->enemy.Resurrect();
+				*ls = LEVEL_INPROGRESS;
+			}
+			break;
+			
+		//player succeeded in hyperspace and is waiting to advance to next level
+		case PLAYER_HS_SUCCEED: 
+			
+			break;
+	}
+}
+
+
+void EventManager::dealWithEnemy(Enemy_States *es, level_status *ls)
+{		
+	*es = pEnemy->GetState();
+	
+	if (*ls == LEVEL_HYPERSPACE) return; //no enemy activity in hyperspace
+	
+	switch(*es)
+	{
+		case ENEMY_ACTIVATING:
+			
+			pEnemy->ReadyToActivate();
+			break;
+		
+		case ENEMY_ALIVE: 
+			
+			if (pEnemy->timeforathink()) pEnemy->think();					
+			pEnemy->move(); //move along path set during last enemy think						
+			break;
+			
+		case ENEMY_RESPAWNING:
+			
+			pEnemy->TrytoRespawn();
+			break;
+			
+		case ENEMY_KILLED:
+			
+			/* if the enemy has been killed, open the portal and check if player enters.
+			   If the player is inside at the moment the portal starts to close, he goes 
+			   into hyperspace. If not, he misses the portal, and the enemy is resurrected. */
+			Portal *pPortal = Game::getPortal();
+			pPortal->Open();
+			
+			Portal_States ps = pPortal->Update();
+			bool playerIn = pPortal->PlayerEntered();
+						
+			if (!playerIn) 
+				pIp = PIP_OUT;				
+			else if (ps == PORTAL_OPENING || ps == PORTAL_OPEN) 
+				pIp = PIP_INWHILEOPEN;
+				
+			if (ps == PORTAL_CLOSING && (pIp == PIP_INWHILEOPEN)) 
+			{
+				*ls = LEVEL_HYPERSPACE;
+				Hyperspace *pHyperspace = Game::getHyperspace();
+				pHyperspace->Start();
+				pPlayer->SetState(PLAYER_HS_ACTIVE); 
+				pPlayer->InitObserver_HS();
+				break;
+			}	
+				
+			if (ps == PORTAL_CLOSED)
+			{ //portal has closed and player missed it
+#ifdef EVENTMANAGER_DEBUG_OUTPUT 
+				printf("portal missed\n");
+#endif //EVENTMANAGER_DEBUG_OUTPUT 
+				pWorld->enemy.Resurrect();
+			}				
+			break;
+	}
+}
+
+
+/* if there are any bullets active, update their positions and velocities,
+   or destroy them. If they have killed the enemy, let the enemy know. */
+void EventManager::dealWithPlayerBullets()
+{
+	float age;
+
+	//remove the old player bullets.
+	
+	//TO DO: make sure this is absolutely correct
+	vector<GameObject*>::iterator iter = pWorld->player_bullets.begin();
+	while (iter != pWorld->player_bullets.end())
+	{
+		age = (*iter)->getAge();
+		if (age>PLAYER_BULLET_LIFETIME) 
+		{
+			delete *iter;
+			pWorld->player_bullets.erase(iter);
+		}
+		else ++iter;		
+	}
+	
+	/* move player bullets one timestep */
+	vector<GameObject*>::iterator iter_killed;
+	bool shot_enemy = false;
+	
+	for (vector<GameObject*>::iterator iter2 = pWorld->player_bullets.begin(); 
+		 iter2 != pWorld->player_bullets.end(); ++iter2) 
+	{
+		if (shot_enemy = (*iter2)->move()) iter_killed = iter2;			
+		if (shot_enemy) break; 		//TO DO: so other bullets are not updated if one hits??
+	}
+	
+	/* remove the bullet if it has collided with the enemy (note, in the unusual
+		case that more than one bullet collides with the enemy in a given timestep, 
+	   only one of them is removed */
+	if (shot_enemy) 
+	{
+		pWorld->player_bullets.erase(iter_killed);
+		pEnemy->kill();
+		pPlayer->addScore(ENEMY_KILL_POINTS);
+#ifdef EVENTMANAGER_DEBUG_OUTPUT 
+		printf("shot the enemy\n");
+#endif //EVENTMANAGER_DEBUG_OUTPUT
+	}	
+}
+
+
+void EventManager::dealWithEnemyBullets()
+{	
+	float age;
+	
+	//remove the old enemy bullets
+	vector<GameObject*>::iterator iter = pWorld->enemy_bullets.begin();
+	while (iter != pWorld->enemy_bullets.end())
+	{
+		age = (*iter)->getAge();
+		if (age>ENEMY_BULLET_LIFETIME) 
+		{
+			delete *iter;
+			pWorld->enemy_bullets.erase(iter);
+		}
+		else ++iter;		
+	}
+	
+	/* move enemy bullets one timestep */
+	vector<GameObject*>::iterator iter_killed;
+	bool killed_player = false;
+	
+	for (vector<GameObject*>::iterator iter2 = pWorld->enemy_bullets.begin(); 
+		 iter2 != pWorld->enemy_bullets.end(); ++iter2) 
+	{
+		if (killed_player = (*iter2)->move()) iter_killed = iter2;				
+		if (killed_player) break;		//TO DO: so other bullets are not updated if one hits??
+	}
+
+	/* remove the bullet if it has collided with the player (note, in the unusual
+	   case that more than one bullet collides with the player in a given timestep, 
+	   only one of them is removed */
+	if (killed_player) 
+	{
+		pWorld->enemy_bullets.erase(iter_killed);
+		pPlayer->kill();
+#ifdef EVENTMANAGER_DEBUG_OUTPUT 
+		printf("player shot\n");
+#endif //EVENTMANAGER_DEBUG_OUTPUT
+	}		
+}
+

@@ -1,0 +1,118 @@
+
+
+#ifndef ENEMY_H
+#define ENEMY_H
+
+#include "world.h"
+#include "GameObject.h"
+#include "Timer.h"
+
+enum Enemy_Behaviours 
+{
+	ENEMY_WAITING, 
+	ENEMY_SEARCHING, 
+	ENEMY_ATTACKING, 
+	ENEMY_DEFENDING
+};
+
+enum Enemy_States 
+{
+	ENEMY_ALIVE, 
+	ENEMY_RESPAWNING, 
+	ENEMY_KILLED, 
+	ENEMY_ACTIVATING
+};
+
+class Enemy : public GameObject {
+	
+public:	
+	
+	Enemy(); //constructor
+	
+	~Enemy(); //destructor
+
+	//actions
+	bool move();
+	
+	void fire();
+	
+	void kill();
+	
+	void Resurrect();
+	
+	void Activate();
+	
+	void ReadyToActivate();
+	
+	void TrytoRespawn();
+	
+	//AI
+	void think();
+	
+	void attack();
+	
+	void defend();
+	
+	void search();
+	
+	//low level stuff
+	void draw(void);
+	
+	bool timeforathink();
+	
+	bool TestCollisionBullet(float *candidate_point, float bulletRadius);
+	
+	void PauseTimers();
+	
+	void UnpauseTimers();
+	
+	void SetState(Enemy_States newState);
+	
+	Enemy_States GetState();
+	
+	int GetLives();
+	
+	//state flags
+	bool stucknexttocylinder;
+	
+	//public data members
+	float position[3], velocity[3], zaxis[3];
+	float height, radius, hover_height,speed;
+	Cylinder *cylinder_nexto;
+
+	
+private:
+	
+	Cylinder* AttemptToMove(float *candidate_point);
+	
+	void WrapDomain(float *original, float *wrapped, float tes);
+	
+	void initialposition();
+	
+	void getCollisiongridIndices(float *position2d, int *n, int *m, float tes);
+	
+	bool LookForPlayer();
+	
+	bool LookForPlayerBullets();
+	
+	void unstickFromCylinder();
+
+	//timing (warning: add to list in PauseTimers() if adding a new timer)
+	Timer thinkTimer, shotTimer, deathTimer, fireTimer, activateTimer, decisionTimer;
+		
+	float lookingat[3], view_dir[3];
+	float deg_to_rad, rad_to_deg;
+	float lastknown_playerdistance, lastknown_playerpos[3];
+	float min_cylinder_approach;
+	
+	bool LOOKING;
+	bool SeePlayer, ThreatenedByBullet;
+	bool FIRED_FIRST_SHOT;
+	enum Enemy_Behaviours behaviour;
+	enum Enemy_States state;
+	int nLives;
+	long seed;
+
+};
+
+#endif //ENEMY_H

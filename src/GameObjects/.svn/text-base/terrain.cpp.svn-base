@@ -1,0 +1,1104 @@
+
+#include "memory.h"
+#include "Game.h"
+#include "terrain.h"
+#include "Fouriermap.h"
+
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+//#define SHOW_LOD_COLORS
+
+Terrain::Terrain(const int ngrid, 
+				 const int nlodcells, 
+				 const int nregions,
+				 const int nlodlevels,
+				 const int seed,
+				 const float terrain_edge_size,
+				 const float terrain_texture_cover,
+				 const float Amp,
+				 const float Np,
+				 const int ktrunc) : 
+
+mNgrid(ngrid),           //grid resolution of underlying height field, MUST be a power of 2 for Fourier transform
+mN_LOD_Cells(nlodcells), //number of LOD cells per edge of the domain
+mN_regions(nregions),    //number of copies of fundamental domain drawn, per edge of world. MUST be odd.
+mN_LOD_levels(nlodlevels),
+mSeed(seed),
+mTerrain_edge_size(terrain_edge_size),
+mTerrain_texture_cover(terrain_texture_cover),
+mAmp(Amp),
+mNp(Np),
+mKtrunc(ktrunc)
+
+{	
+	dl_terrain = 5.0e-4*mTerrain_edge_size;
+	dl_cell = mTerrain_edge_size/(float)mN_LOD_Cells;
+	
+	for (int a=0;a<mN_LOD_levels;a++) 
+		LOD_Cells[a] = celllink_matrix(0,mN_LOD_Cells-1,0,mN_LOD_Cells-1);
+	
+	//make a periodic 2d heightmap with Fourier transform method
+	fouriermap = new Fouriermap(mSeed,mNgrid,mTerrain_edge_size,mAmp,mNp,mKtrunc); 
+	
+	//allocate some working memory for vertex ops 
+	verts_temp = matrix(0,3,0,2); vnew_temp = matrix(0,3,0,2);
+	texcs_temp = matrix(0,3,0,1); tnew_temp = matrix(0,3,0,1);	
+	vd1        = matrix(0,3,0,3); vd2       = matrix(0,3,0,3);	     
+	vd1_match  = matrix(0,3,0,3); vd2_match = matrix(0,3,0,3); 
+	ev_temp    = imatrix(0,1,0,1);
+	
+	//matrix which stores the LOD of each base cell, computed at runtime
+	LODlevels = imatrix(0,mN_regions*mN_LOD_Cells,0,mN_regions*mN_LOD_Cells);
+	
+	//generate the mesh vertices for all levels of detail
+	constructmesh();
+	
+	/* material properties for lighting */
+	float mat_shin[1] = {20.0};
+	float mat_spec[4] = {0.4, 0.15, 0.4, 1.0};	
+	float mat_diff[4] = {0.16, 0.25, 0.55, 1.0};
+	float mat_ambi[4] = {0.1, 0.1, 0.0, 1.0};
+	float mat_emis[4] = {0.2, 0.25, 0.6, 1.0};	
+	
+	mat_shininess[0] = mat_shin[0];
+	for (int a=0;a<3;a++) 
+	{
+		mat_specular[a] = mat_spec[a];
+		mat_diffuse[a]  = mat_diff[a];
+		mat_ambient[a]  = mat_ambi[a];
+		mat_emission[a] = mat_emis[a];
+	}
+	modify_material(1.0);
+	
+	float mEmission[4] = {0.0,0.0,0.0,1.0};
+	for (int a=0;a<4;a++)
+		no_emission[a] = mEmission[a];	
+	
+	deg_to_rad = M_PI/180.0;	
+	
+}
+
+Terrain::~Terrain()  //destructor
+{		
+	free_LODcells();
+	free_matrix(verts_temp,0,3,0,2); free_matrix(vnew_temp,0,3,0,2);
+	free_matrix(texcs_temp,0,3,0,1); free_matrix(tnew_temp,0,3,0,1);	
+	free_imatrix(ev_temp,0,1,0,1);
+	free_matrix(vd1,0,3,0,3); 	     free_matrix(vd2,0,3,0,3);	     
+	free_matrix(vd1_match,0,3,0,3);  free_matrix(vd2_match,0,3,0,3); 
+	free_imatrix(LODlevels,0,mN_regions*mN_LOD_Cells,0,mN_regions*mN_LOD_Cells);
+	delete fouriermap;
+}
+
+/* frees the linked lists containing LOD terrain vertex data */
+void Terrain::free_LODcells()
+{
+	celllink cl;
+	for (int a=0;a<mN_LOD_levels;a++) 
+	{
+		for (int i=0; i<mN_LOD_Cells; i++) 
+			for (int j=0; j<mN_LOD_Cells; j++) 
+			{
+				cl = LOD_Cells[a][i][j];
+				while (cl != NULL) 
+				{								
+					free((LODcell*)cl);
+					cl = cl->next;
+				}
+			};
+		free_celllinkmatrix(LOD_Cells[a],0,mN_LOD_Cells-1,0,mN_LOD_Cells-1);
+	}
+}
+
+
+/* terrain mesh data of the 'fundamental domain' is contained in a quad tree data structure.
+   The first level of the tree consists of "base cells", i.e. groups of 4 vertices
+   arranged in a square. Each base cell is refined into 4 square sub-cells
+   to generate cells of the next LOD, and so on. */
+void Terrain::constructmesh() 
+{
+	int i,j;			
+	celllink root, parent, child;
+	
+	/* Work through all N_LOD_Cells^2 base cells. Generate and store the vertices
+	   of the sub-cells contained in each base cell, for each level of detail,
+	   in a separate linked list. */
+	for (i=0; i<mN_LOD_Cells; i++) 
+		for (j=0; j<mN_LOD_Cells; j++) 
+		{
+			
+			//make the lowest resolution cell list
+			if ( (LOD_Cells[0][i][j] = (LODcell*)malloc(sizeof(LODcell))) == NULL )
+			{
+				printf("failed to allocate memory in Terrain::constructmesh\n");
+				exit(EXIT_FAILURE);
+			}
+			root = LOD_Cells[0][i][j];
+			generateBaseLODCell(i,j,&root);
+			
+			//generate successive refinements of cells
+			for (int lod=1;lod<mN_LOD_levels;lod++) 
+			{				
+				parent = LOD_Cells[lod-1][i][j]->next;	
+				
+				//make the a-th refinement level cell list
+				if ( (LOD_Cells[lod][i][j] = (LODcell*)malloc(sizeof(LODcell))) == NULL )
+				{
+					printf("failed to allocate memory in Terrain::constructmesh\n");
+					exit(EXIT_FAILURE);
+				}
+				child = LOD_Cells[lod][i][j];
+				
+				//work through all cells in the parent list,
+				//refine them and add all refined cells to the child list								
+				while (parent != NULL) 
+				{								
+					generateRefinedLODCell(parent,&child);
+					parent = parent->next;
+				}				
+			}			
+		};
+	
+}
+
+//refine the parent cell into 4 child cells, and add them to child list
+void Terrain::generateRefinedLODCell(celllink parent, celllink *child)
+{				
+	LODcell *newcells;
+	if ( (newcells = (LODcell*)malloc(4*sizeof(LODcell))) == NULL )
+	{
+		printf("failed to allocate memory in Terrain::generateRefinedLODCell\n");
+		exit(EXIT_FAILURE);
+	}
+	refineCell(parent, newcells);
+	for (int c=0;c<4;c++) 					
+		addCelltoList(child, &newcells[c]);
+	
+	delete newcells;
+}
+
+
+inline void Terrain::makeLODcell(celllink cell, float **verts, float **texcs,
+								 float *interp_heights, int LOD, int cellpos, int borderpos)
+{	
+	int a,b;
+	for (a=0;a<4;a++) 
+	{					
+		for (b=0;b<3;b++) 							
+			cell->v[a][b] = verts[a][b];
+		for (b=0;b<2;b++) 							
+			cell->t[a][b] = texcs[a][b];
+		
+		cell->ih[a] = interp_heights[a];
+	}	
+	cell->X[0] = verts[0][0]; cell->X[1] = verts[1][0];
+	cell->Y[0] = verts[0][1]; cell->Y[1] = verts[2][1];
+	cell->myLOD = LOD;
+	cell->cell_pos = cellpos;
+	cell->B = (border_positions)borderpos;
+}
+
+
+void Terrain::generateBaseLODCell(int i, int j, celllink *clp)
+{
+	//base cell boundaries
+	float Xcell[2], Ycell[2];
+	
+	Xcell[0] = dl_cell*(float)i; Xcell[1] = dl_cell*(float)(i+1);
+	Ycell[0] = dl_cell*(float)j; Ycell[1] = dl_cell*(float)(j+1);
+	
+	float ih[4];
+	verts_temp[0][0] = Xcell[0]; verts_temp[0][1] = Ycell[0];
+	verts_temp[1][0] = Xcell[1]; verts_temp[1][1] = Ycell[0];
+	verts_temp[2][0] = Xcell[1]; verts_temp[2][1] = Ycell[1];
+	verts_temp[3][0] = Xcell[0]; verts_temp[3][1] = Ycell[1];
+	
+	for (int b=0;b<4;b++) 
+	{					
+		verts_temp[b][2] = height(verts_temp[b][0],verts_temp[b][1]);
+		ih[b] = verts_temp[b][2];
+		texcs_temp[b][0] = 0.0; texcs_temp[b][1] = 0.0;
+	}
+		
+	texcs_temp[1][0] = mTerrain_texture_cover;
+	texcs_temp[2][0] = mTerrain_texture_cover;
+	texcs_temp[2][1] = mTerrain_texture_cover; 
+	texcs_temp[3][1] = mTerrain_texture_cover; 	
+	
+	LODcell newcell;
+	int LOD = 0, cellpos = 0; 
+	enum border_positions Bp; Bp = (border_positions)l; 
+	makeLODcell(&newcell,verts_temp,texcs_temp,ih,LOD,cellpos,Bp);
+	addCelltoList(clp,&newcell);
+}
+
+void Terrain::addCelltoList(celllink *clp, celllink newcell_ptr)
+{	
+	if ( ((*clp)->next = (LODcell*)malloc(sizeof(LODcell)))==NULL )
+	{
+		printf("failed to allocate memory in Terrain::addCelltoList\n");
+		exit(EXIT_FAILURE);
+	}
+		
+	*clp = (*clp)->next; 	
+	(*clp)->next = NULL; //i.e. this is the last cell in this list, so far
+	
+	for (int a=0;a<4;a++) 
+	{					
+		for (int b=0;b<3;b++) (*clp)->v[a][b] = newcell_ptr->v[a][b];		
+		for (int b=0;b<2;b++) (*clp)->t[a][b] = newcell_ptr->t[a][b];
+		(*clp)->ih[a] = newcell_ptr->ih[a];
+	}	
+	(*clp)->X[0] = newcell_ptr->v[0][0];
+	(*clp)->X[1] = newcell_ptr->v[1][0];
+	(*clp)->Y[0] = newcell_ptr->v[0][1];
+	(*clp)->Y[1] = newcell_ptr->v[2][1];
+	
+	//make triangle data for this cell
+	
+	/* Note that each sub-cell is drawn as two triangles. With cell vertices indexed
+	   as {0,1,2,3} corresponding to corners {bl,br,tr,tl}, triangle 1 has vertices {0,1,2},
+	   and triangle 2 has vertices {0,2,3}. */
+		
+	/* triangle 1 */		
+	for (int a=0;a<3;a++) 
+	{
+		((*clp)->t1).v[0][a] = newcell_ptr->v[0][a];
+        ((*clp)->t1).v[1][a] = newcell_ptr->v[1][a];
+		((*clp)->t1).v[2][a] = newcell_ptr->v[2][a];
+	}		
+	for (int a=0;a<2;a++) 
+	{
+		((*clp)->t1).t[0][a] = newcell_ptr->t[0][a];
+		((*clp)->t1).t[1][a] = newcell_ptr->t[1][a];
+		((*clp)->t1).t[2][a] = newcell_ptr->t[2][a];
+	}
+	for (int a=0;a<3;a++) 
+	{
+		((*clp)->t1).meanv[a] = 0.0;
+		for (int b=0;b<3;b++) ((*clp)->t1).meanv[a] += ((*clp)->t1).v[b][a];
+		((*clp)->t1).meanv[a] /= 3.0;
+	}
+    for (int a=0;a<3;a++) 
+		getLocalNormal(((*clp)->t1).n[a],
+					   ((*clp)->t1).v[a][0],
+					   ((*clp)->t1).v[a][1]);
+	
+	/* triangle 2 */
+	for (int a=0;a<3;a++) 
+	{
+		((*clp)->t2).v[0][a] = newcell_ptr->v[0][a];
+		((*clp)->t2).v[1][a] = newcell_ptr->v[2][a];
+		((*clp)->t2).v[2][a] = newcell_ptr->v[3][a];
+	}
+	for (int a=0;a<2;a++) 
+	{
+		((*clp)->t2).t[0][a] = newcell_ptr->t[0][a];
+		((*clp)->t2).t[1][a] = newcell_ptr->t[2][a];
+		((*clp)->t2).t[2][a] = newcell_ptr->t[3][a];
+	}
+	for (int a=0;a<3;a++) 
+	{
+		((*clp)->t2).meanv[a] = 0.0;
+		for (int b=0;b<3;b++) ((*clp)->t2).meanv[a] += ((*clp)->t2).v[b][a];
+		((*clp)->t2).meanv[a] /= 3.0;
+	}
+	for (int a=0;a<3;a++) 
+	{
+		getLocalNormal(((*clp)->t2).n[a],
+					   ((*clp)->t2).v[a][0],
+					   ((*clp)->t2).v[a][1]);
+	}		
+	
+	(*clp)->myLOD = newcell_ptr->myLOD;
+	(*clp)->cell_pos = newcell_ptr->cell_pos;
+	(*clp)->B = newcell_ptr->B;
+	
+	/* 	If a sub-cell lies on the border of the base cell, it may need to be matched to the
+		neighbouring sub-cells, if the adjacent base cell has a different LOD (at runtime).
+		
+		To achieve this, we now store (in the sub-cell) triangles which match across the boundary. 
+		Clearly if a triangle is on a {t,b,l,r} boundary, we need to match across the corresponding edge.
+		In the case of a corner, there are two edges to consider. */		
+
+	enum border_positions cb = (*clp)->B;
+	
+	//match non-corner cells
+	if ( cb == t || cb == b || cb == l || cb == r || cb == INSIDE ) 
+	{				
+	 /* The modified heights have been computed in refineCell(), but the vertices which need
+		to be modified depend on which neighbours we have to match.
+		
+		This table contains data which describes which triangle vertices to modify, given
+		the boundary position of the triangle (in this case on one of the boundaries in the cardinal
+		directions {t,b,l,r}). Value -1 indicates that this vertex does not need to be modified, otherwise
+		the value in the table is the cell index of the vertex which needs to be modified.
+		
+		(in modify_cardinal[a][b][c], a is the direction {l,r,t,b,INSIDE}, b is the triangle index {0,1},
+		 and c is the triangle vertex) */		
+
+		int modify_cardinal[5][2][3] = 
+		{
+		{{ 0, -1, -1 },  { 0, -1,  3 }}, 
+		{{-1,  1,  2 },  {-1,  2, -1 }}, 
+		{{-1, -1,  2 },  {-1,  2,  3 }}, 
+		{{ 0,  1, -1 },  { 0, -1, -1 }},
+		{{-1, -1, -1 },  {-1, -1, -1 }}  
+		};	
+
+		int bp = (int)cb - 4;
+		
+		for (int a=0;a<3;a++) 
+		{
+			for (int b=0;b<3;b++) 
+			{			
+				((*clp)->t1_match).v[b][a] = ((*clp)->t1).v[b][a];
+				((*clp)->t2_match).v[b][a] = ((*clp)->t2).v[b][a];
+			}
+		}		
+		for (int a=0;a<2;a++) 
+		{
+			for (int b=0;b<3;b++) 
+			{			
+				((*clp)->t1_match).t[b][a] = ((*clp)->t1).t[b][a];
+				((*clp)->t2_match).t[b][a] = ((*clp)->t2).t[b][a];
+			}
+		}	
+		for (int a=0;a<3;a++) 
+		{
+			((*clp)->t1_match).meanv[a] = 0.0;
+			for (int b=0;b<3;b++) 
+			{
+				((*clp)->t1_match).meanv[a] += ((*clp)->t1_match).v[b][a];
+				((*clp)->t2_match).meanv[a] += ((*clp)->t2_match).v[b][a];
+				((*clp)->t1_match).n[a][b] = ((*clp)->t1).n[a][b];
+				((*clp)->t2_match).n[a][b] = ((*clp)->t2).n[a][b];
+			}
+			((*clp)->t1_match).meanv[a] /= 3.0;
+			((*clp)->t2_match).meanv[a] /= 3.0;
+		}	
+				
+		for (int a=0;a<3;a++) 
+		{
+			if (modify_cardinal[bp][0][a] != -1) 
+				((*clp)->t1_match).v[a][2] = newcell_ptr->ih[modify_cardinal[bp][0][a]];
+			if (modify_cardinal[bp][1][a] != -1) 
+				((*clp)->t2_match).v[a][2] = newcell_ptr->ih[modify_cardinal[bp][1][a]];
+		}
+		
+	}
+	
+	//match corner cells
+	else 
+	{
+	 /* The following tables contain data which describes which triangle vertices to modify, given
+		the boundary position of the triangle (in this case at one of the corners {bl, br, tr, tl}).
+		At the corners, we need to consider three different matching cases, e.g. in the case of the tl
+		corner, we might need to match across both T and L, or across T but not L, or across L but not T.
+		
+		Referring to the adjacent sides (i.e. cardinal directions) at the corner as (0,1),
+		where 1 is reached from 0 by an anti-clockwise turn around the corner, we have the following tables
+		(in modify_corner[a][b][c], a is the corner {bl, br, tr, tl}, b is the triangle index {0,1},
+		 and c is the triangle vertex) */
+											   
+		//corner, match side 0 only
+		int modify_corner1[4][2][3] = 
+		{
+		{{ 0, -1, -1 },{ 0, -1,  3 }}, 
+		{{ 0,  1, -1 },{ 0, -1, -1 }}, 
+		{{-1,  1,  2 },{-1,  2, -1 }}, 
+		{{-1, -1,  2 },{-1,  2,  3 }}  
+		};	
+		
+		//corner, match sides 1 only
+		int modify_corner2[4][2][3] = 
+		{
+		{{ 0,  1, -1 },{ 0, -1, -1 }}, 
+		{{-1,  1,  2 },{-1,  2, -1 }}, 
+		{{-1, -1,  2 },{-1,  2,  3 }}, 
+		{{ 0, -1, -1 },{ 0, -1,  3 }}  
+		};	
+		
+		//corner, match both sides 0 and 1 
+		int modify_corner3[4][2][3] = 
+		{
+		{{ 0,  1, -1 },{ 0, -1,  3 }}, 
+		{{ 0,  1,  2 },{ 0,  2, -1 }}, 
+		{{-1,  1,  2 },{-1,  2,  3 }}, 
+		{{ 0, -1,  2 },{ 0,  2,  3 }}  
+		};	
+		
+		for (int a=0;a<3;a++) 
+		{
+			for (int b=0;b<3;b++) 
+			{			
+				((*clp)->t1_match_c1).v[b][a] = ((*clp)->t1).v[b][a];
+				((*clp)->t2_match_c1).v[b][a] = ((*clp)->t2).v[b][a];
+				((*clp)->t1_match_c2).v[b][a] = ((*clp)->t1).v[b][a];
+				((*clp)->t2_match_c2).v[b][a] = ((*clp)->t2).v[b][a];
+				((*clp)->t1_match_c3).v[b][a] = ((*clp)->t1).v[b][a];
+				((*clp)->t2_match_c3).v[b][a] = ((*clp)->t2).v[b][a];
+			}
+		}		
+		for (int a=0;a<2;a++) 
+		{
+			for (int b=0;b<3;b++) 
+			{			
+				((*clp)->t1_match_c1).t[b][a] = ((*clp)->t1).t[b][a];
+				((*clp)->t2_match_c1).t[b][a] = ((*clp)->t2).t[b][a];
+				((*clp)->t1_match_c2).t[b][a] = ((*clp)->t1).t[b][a];
+				((*clp)->t2_match_c2).t[b][a] = ((*clp)->t2).t[b][a];
+				((*clp)->t1_match_c3).t[b][a] = ((*clp)->t1).t[b][a];
+				((*clp)->t2_match_c3).t[b][a] = ((*clp)->t2).t[b][a];
+			}
+		}	
+		for (int a=0;a<3;a++) 
+		{
+			for (int b=0;b<3;b++)
+			{
+				((*clp)->t1_match_c1).n[a][b] = ((*clp)->t1).n[a][b];
+				((*clp)->t2_match_c1).n[a][b] = ((*clp)->t2).n[a][b];
+				((*clp)->t1_match_c2).n[a][b] = ((*clp)->t1).n[a][b];
+				((*clp)->t2_match_c2).n[a][b] = ((*clp)->t2).n[a][b];
+				((*clp)->t1_match_c3).n[a][b] = ((*clp)->t1).n[a][b];
+				((*clp)->t2_match_c3).n[a][b] = ((*clp)->t2).n[a][b];
+			}
+		}
+		
+		for (int a=0;a<3;a++) 
+		{
+			if (modify_corner1[cb][0][a] != -1) 
+				((*clp)->t1_match_c1).v[a][2] = newcell_ptr->ih[modify_corner1[cb][0][a]];
+
+			if (modify_corner1[cb][1][a] != -1) 
+				((*clp)->t2_match_c1).v[a][2] = newcell_ptr->ih[modify_corner1[cb][1][a]];
+						
+			if (modify_corner2[cb][0][a] != -1) 
+				((*clp)->t1_match_c2).v[a][2] = newcell_ptr->ih[modify_corner2[cb][0][a]];
+			
+			if (modify_corner2[cb][1][a] != -1) 
+				((*clp)->t2_match_c2).v[a][2] = newcell_ptr->ih[modify_corner2[cb][1][a]];
+			
+			if (modify_corner3[cb][0][a] != -1) 
+				((*clp)->t1_match_c3).v[a][2] = newcell_ptr->ih[modify_corner3[cb][0][a]];
+			
+			if (modify_corner3[cb][1][a] != -1) 
+				((*clp)->t2_match_c3).v[a][2] = newcell_ptr->ih[modify_corner3[cb][1][a]];
+					
+		}
+		
+	}
+	
+}
+
+
+inline void Terrain::placeedge(float *ve, int **ev, LODcell *cell)
+{
+	ve[0] = 0.5*(cell->X[ev[0][0]]+cell->X[ev[1][0]]);
+	ve[1] = 0.5*(cell->Y[ev[0][1]]+cell->Y[ev[1][1]]);	
+	ve[2] = height(ve[0],ve[1]);
+}
+
+
+/* add a central vertex and edge vertices which match bounding triangles.
+   produces 4 new cells which fit into surrounding un-refined landscape */
+void Terrain::refineCell(celllink cell, celllink newcells)
+{
+	//add central vertex
+	float vc[3];
+	
+	vc[0] = 0.5*(cell->X[0]+cell->X[1]);
+	vc[1] = 0.5*(cell->Y[0]+cell->Y[1]);
+	vc[2] = height(vc[0],vc[1]);
+	
+	//add edge vertices 
+	
+	/* Refine using the true height at each vertex, but store the interpolated heights also, 
+	   in the refined cell. Thus when we find an a-cell (i.e. LOD=a) next to an (a-1)-cell across the +x-edge we
+	   use the interpolated value in the a-cell +x-vertices.
+		
+	   NB, OpenGL cannot draw a T-junction of triangles without a line of pixels at the junction appearing,
+	   so I introduce an offset in the interpolated height to hide the crack from the viewer 
+	   (positive offset, since the higher-detail interpolated cells lie closer to the viewer).
+	   TO DO: drawing zero-area "degenerate triangles" will solve this problem without crack-pasting. */
+		
+	double crack_hide = 5.0e-5;
+	
+	// (0,0) -> (1,0)
+	float ve0[3];
+	ev_temp[0][0] = 0; ev_temp[0][1] = 0;
+	ev_temp[1][0] = 1; ev_temp[1][1] = 0;
+	float h0 = 0.5*((double)cell->v[0][2]+cell->v[1][2])+crack_hide; //interpolated height
+	placeedge(ve0,ev_temp,cell);
+	
+	// (1,0) -> (1,1)
+	float ve1[3];
+	ev_temp[0][0] = 1; ev_temp[0][1] = 0;
+	ev_temp[1][0] = 1; ev_temp[1][1] = 1;
+	float h1 = 0.5*((double)cell->v[1][2]+cell->v[2][2])+crack_hide;
+	placeedge(ve1,ev_temp,cell);
+	
+	// (1,1) -> (0,1)
+	float ve2[3];
+	ev_temp[0][0] = 1; ev_temp[0][1] = 1;
+	ev_temp[1][0] = 0; ev_temp[1][1] = 1;
+	float h2 = 0.5*((double)cell->v[2][2]+cell->v[3][2])+crack_hide;
+	placeedge(ve2,ev_temp,cell);
+	
+	// (0,1) -> (0,0)
+	float ve3[3];
+	ev_temp[0][0] = 0; ev_temp[0][1] = 1;
+	ev_temp[1][0] = 0; ev_temp[1][1] = 0;
+	float h3 = 0.5*((double)cell->v[3][2]+cell->v[0][2])+crack_hide;
+	placeedge(ve3,ev_temp,cell);
+	
+	/* make new cells */		
+	int parentLOD = cell->myLOD;
+	int a, cellpos;
+	enum border_positions Bc[4]; //child cell border positions, to be determined
+	
+	//get parent border position;
+	enum border_positions Bp;
+	Bp = cell->B;		
+	
+	if (parentLOD==0)
+		for (a=0;a<4;a++) Bc[a] = (border_positions)a; 
+	else 
+		findCellBorders(Bc,Bp);
+	
+	float ihnew[4];
+	float t0x = cell->t[0][0]; float t0y = cell->t[0][1];
+	float t1x = cell->t[1][0]; float t1y = cell->t[2][1];
+	float tcx = 0.5*(t0x+t1x); float tcy = 0.5*(t0y+t1y);
+	
+	/* cell 0 */
+	for (a=0;a<3;a++) 
+	{
+		vnew_temp[0][a] = cell->v[0][a]; vnew_temp[1][a] = ve0[a];
+		vnew_temp[2][a] = vc[a];         vnew_temp[3][a] = ve3[a];
+	}			
+	tnew_temp[0][0] = t0x; tnew_temp[0][1] = t0y;
+	tnew_temp[1][0] = tcx; tnew_temp[1][1] = t0y;	
+	tnew_temp[2][0] = tcx; tnew_temp[2][1] = tcy;
+	tnew_temp[3][0] = t0x; tnew_temp[3][1] = tcy;
+	ihnew[0] = vnew_temp[0][2]; ihnew[1] = h0;
+	ihnew[2] = vc[2];           ihnew[3] = h3;
+	cellpos = 0;			
+	makeLODcell(&newcells[0],vnew_temp,tnew_temp,ihnew,parentLOD+1,cellpos,Bc[0]);
+	
+	/* cell 1 */
+	for (a=0;a<3;a++) 
+	{
+		vnew_temp[0][a] = ve0[a]; vnew_temp[1][a] = cell->v[1][a];
+		vnew_temp[2][a] = ve1[a]; vnew_temp[3][a] = vc[a];
+	}	
+	tnew_temp[0][0] = tcx; tnew_temp[0][1] = t0y;
+	tnew_temp[1][0] = t1x; tnew_temp[1][1] = t0y;	
+	tnew_temp[2][0] = t1x; tnew_temp[2][1] = tcy;
+	tnew_temp[3][0] = tcx; tnew_temp[3][1] = tcy;
+	ihnew[0] = h0; ihnew[1] = vnew_temp[1][2];
+	ihnew[2] = h1; ihnew[3] = vc[2];
+	cellpos = 1;
+	makeLODcell(&newcells[1],vnew_temp,tnew_temp,ihnew,parentLOD+1,cellpos,Bc[1]);
+	
+	/* cell 2 */
+	for (a=0;a<3;a++) 
+	{
+		vnew_temp[0][a] = vc[a];         vnew_temp[1][a] = ve1[a];
+		vnew_temp[2][a] = cell->v[2][a]; vnew_temp[3][a] = ve2[a];
+	}		
+	tnew_temp[0][0] = tcx; tnew_temp[0][1] = tcy;
+	tnew_temp[1][0] = t1x; tnew_temp[1][1] = tcy;	
+	tnew_temp[2][0] = t1x; tnew_temp[2][1] = t1y;
+	tnew_temp[3][0] = tcx; tnew_temp[3][1] = t1y;
+	ihnew[0] = vc[2];           ihnew[1] = h1;
+	ihnew[2] = vnew_temp[2][2]; ihnew[3] = h2;
+	cellpos = 2;
+	makeLODcell(&newcells[2],vnew_temp,tnew_temp,ihnew,parentLOD+1,cellpos,Bc[2]);
+	
+	/* cell 3 */
+	for (a=0;a<3;a++) 
+	{
+		vnew_temp[0][a] = ve3[a]; vnew_temp[1][a] = vc[a];
+		vnew_temp[2][a] = ve2[a]; vnew_temp[3][a] = cell->v[3][a];
+	}
+	tnew_temp[0][0] = t0x; tnew_temp[0][1] = tcy;
+	tnew_temp[1][0] = tcx; tnew_temp[1][1] = tcy;	
+	tnew_temp[2][0] = tcx; tnew_temp[2][1] = t1y;
+	tnew_temp[3][0] = t0x; tnew_temp[3][1] = t1y;	
+	ihnew[0] = h3; ihnew[1] = vc[2];
+	ihnew[2] = h2; ihnew[3] = vnew_temp[3][2];
+	cellpos = 3;
+	makeLODcell(&newcells[3],vnew_temp,tnew_temp,ihnew,parentLOD+1,cellpos,Bc[3]);
+	
+}
+
+
+void Terrain::SetTexture(string inTextureName)
+{
+	TextureLibrary *texturelibrary = Game::getTextureLibrary();
+	string texturepath = FileUtils::GetApplicationResourcesFolderPath() + inTextureName;
+	mTexture = texturelibrary->GetTexture(texturepath, BUILD_MIPMAPS);
+}
+
+/* scale material values, mainly to allow for terrain darkening on entering portal */
+void Terrain::modify_material(float alpha)
+{
+	for (int a=0;a<3;a++) 
+	{
+		specular_modif[a] = alpha*mat_specular[a];
+		diffuse_modif[a]  = alpha*mat_diffuse[a];
+		ambient_modif[a]  = alpha*mat_ambient[a];
+		emission_modif[a] = alpha*mat_emission[a];
+	}
+}
+
+
+/* test if a point lies in front (return false) of the player view plane or behind (return true) */
+inline bool Terrain::cull(float *point, float *view_point, float *view_dir)
+{
+	float dirvec[3];
+	for (int a=0;a<3;a++) dirvec[a] = point[a]-view_point[a];
+	return ( scalarprod(dirvec,view_dir)<0.0 );
+}
+
+/* Note, 9 (translated) copies of the heightfield mesh are drawn to give wraparound effect */
+void Terrain::draw(void)
+{
+	Player* pPlayer = Game::getPlayer();
+	float *view_dir = pPlayer->GetViewDirection();
+	float *view_point = pPlayer->GetViewPoint();
+	
+
+	glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, mat_shininess);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, specular_modif);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,  diffuse_modif);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,  ambient_modif);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, emission_modif);
+
+	glEnable(GL_LIGHTING);
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_TEXTURE_2D);
+	glShadeModel(GL_SMOOTH);
+		
+	glTexEnvf(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);	
+	mTexture->Apply();
+	
+	int i,j,a,lod;
+	celllink cl;
+	
+#ifdef SHOW_LOD_COLORS
+	glDisable(GL_FOG);
+	glDisable(GL_LIGHTING);
+	glShadeModel (GL_FLAT);
+#endif
+	
+	//glBegin(GL_TRIANGLES);	
+	
+#ifdef SHOW_LOD_COLORS
+	static bool COUNT_CELLS = true;
+	int *n_lod_cells = new int[mN_LOD_levels];
+	int *n_lod_tris  = new int[mN_LOD_levels];
+	
+	if (COUNT_CELLS) {
+		for (i=0; i<mN_LOD_levels; i++) 
+		{		
+			n_lod_cells[i]=0;
+			n_lod_tris[i]=0;
+		}
+	}
+#endif
+	
+	//find and store LOD of each base cell in each of the N_regions^2 copies of the central domain
+	float translate_x, translate_y, cx, cy;
+	int ma, mb, Ma, Mb;
+	
+	float midpnt = 0.5*float(mN_regions-1);
+	
+	for (ma=0; ma<mN_regions; ma++) 
+	{
+		translate_x = ((float)ma-midpnt)*mTerrain_edge_size;
+		Ma = mN_LOD_Cells*ma;
+		
+		for (mb=0; mb<mN_regions; mb++) 
+		{
+			translate_y = ((float)mb-midpnt)*mTerrain_edge_size;	
+			Mb = mN_LOD_Cells*mb;
+			
+			for (i=0; i<mN_LOD_Cells; i++) 
+			{		
+				cx = dl_cell*(0.5+(float)i) + translate_x;
+				for (j=0; j<mN_LOD_Cells; j++) 
+				{
+					cy = dl_cell*(0.5+(float)j) + translate_y;
+					LODlevels[Ma+i][Mb+j] = getLOD(cx,cy,view_point);
+				}
+			}
+		}
+	}
+	
+	//draw cells of each of the 9 copies of the terrain
+	for (ma=0; ma<mN_regions; ma++) 
+	{
+		translate_x = ((float)ma-midpnt)*mTerrain_edge_size;
+		Ma = mN_LOD_Cells*ma;
+
+		for (mb=0; mb<mN_regions; mb++)
+		{
+			translate_y = ((float)mb-midpnt)*mTerrain_edge_size;
+			Mb = mN_LOD_Cells*mb;
+
+			for (i=0; i<mN_LOD_Cells; i++) 
+			{		
+				for (j=0; j<mN_LOD_Cells; j++) 
+				{
+					lod = LODlevels[Ma+i][Mb+j];
+					
+					//if lod>0, find the LOD of the neighbouring LOD cells.
+					//If a neighbour has a lower LOD, we must use the stored matching
+					//vertex height along the neighbour boundary, not the true landscape h.
+					//BOOL matching records whether we need to match, and match_cardinal records the direction.
+					match_cardinal[L] = false; match_cardinal[R] = false;
+					match_cardinal[T] = false; match_cardinal[B] = false;
+					matching = false;
+					if (lod>0) {			
+						getLODneighbours(Ma+i,Mb+j,neigh_i,neigh_j);
+						for (card=L; card<=B; card=(cardinals)(card+1)) 
+						{
+							if ( LODlevels[neigh_i[card]][neigh_j[card]]<lod ) 
+							{
+								//we will assume that neighbours lod differs by at most 1.
+								//this must be arranged in the getLOD() function.
+								//This is because we will store vertices in each cell to match
+								//with parent cell, but not with parent's parent's etc.
+								if (LODlevels[neigh_i[card]][neigh_j[card]]<lod-1) 
+								{
+									printf("error: terrain contains neighbouring cells with LOD's which differ by more than 1. %d %d %d\n",i,j,lod);
+									exit(1);
+								}
+								match_cardinal[card] = true;
+								matching = true;
+							}
+						}				
+					}
+										
+#ifdef SHOW_LOD_COLORS
+					if (COUNT_CELLS) n_lod_cells[lod]++;
+					
+					mat_ambient[0] = (float)lod/(float)mN_LOD_levels;
+					mat_ambient[1] = (float)lod/(float)mN_LOD_levels;
+					mat_ambient[2] = 1.0-(float)lod/(float)mN_LOD_levels;
+					glColor3fv(mat_ambient);
+					
+#endif
+					
+					diffuse_modif[0] = 1.0f - 0.8f*( (float)((i+j)%mN_LOD_Cells) ) / (float)mN_LOD_Cells;
+					diffuse_modif[1] = 1.0f - 0.8f*( (float)((i-j)%mN_LOD_Cells) ) / (float)mN_LOD_Cells;
+					glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, diffuse_modif);
+								
+					glBegin(GL_TRIANGLES);
+					
+					//advance through linked list containing lod-level triangles for this LOD cell			
+					cl = LOD_Cells[lod][i][j]->next;	
+					
+					while (cl != NULL) 
+					{	
+						for (a=0;a<3;a++) 
+						{
+							//do a memcpy since we need to translate vd1 and vd2
+							memcpy(vd1[a],&(cl->t1.v[a][0]),3*sizeof(float)); 
+							memcpy(vd2[a],&(cl->t2.v[a][0]),3*sizeof(float)); 
+							vd1[a][0] += translate_x; vd2[a][0] += translate_x;
+							vd1[a][1] += translate_y; vd2[a][1] += translate_y;
+							nd1[a] = &(cl->t1.n[a][0]); nd2[a] = &(cl->t2.n[a][0]);
+							td1[a] = &(cl->t1.t[a][0]); td2[a] = &(cl->t2.t[a][0]);
+						}										
+						memcpy(meanv1,&(cl->t1.meanv[0]),3*sizeof(float)); 
+						memcpy(meanv2,&(cl->t2.meanv[0]),3*sizeof(float));												
+						meanv1[0] += translate_x; meanv2[0] += translate_x;
+						meanv1[1] += translate_y; meanv2[1] += translate_y;
+
+						/* cull() determines whether a vertex lies in front of the observer view plane.
+						   If its mean vertex position is visible, a triangle is certainly drawn, otherwise
+						   we check all the vertices and draw if any of them is visible (i.e. not culled)
+						   (since if at least one vertex lies in front of the observer plane, some of the 
+						   triangle may be visible). */
+						
+						if ( cull(meanv1,view_point,view_dir) )
+						{
+							cullvertex[0] = cull(vd1[0],view_point,view_dir);
+							cullvertex[1] = cull(vd1[1],view_point,view_dir);
+							cullvertex[2] = cull(vd1[2],view_point,view_dir);				
+							cansee1 = !(cullvertex[0] && cullvertex[1] && cullvertex[2]);					
+						}
+						else 
+							cansee1 = true;
+						
+						if ( cull(meanv2,view_point,view_dir) )
+						{
+							cullvertex[0] = cull(vd2[0],view_point,view_dir);
+							cullvertex[1] = cull(vd2[1],view_point,view_dir);
+							cullvertex[2] = cull(vd2[2],view_point,view_dir);	
+							cansee2 = !(cullvertex[0] && cullvertex[1] && cullvertex[2]);					
+						}
+						else 
+							cansee2 = true;
+						
+						/* If any of the vertices in either triangle are visible, draw the whole sub-cell,
+						   except if the mean position of triangle 1 is too distant. */
+						if(  (cansee1 || cansee2)
+							 && visible(meanv1,view_point,midpnt*mTerrain_edge_size) )
+						{
+
+#ifdef SHOW_LOD_COLORS
+							if (COUNT_CELLS) n_lod_tris[lod]+=2;
+#endif					
+							
+							if (!matching) 
+							{ //no matching required						
+								drawtriangle(vd1,nd1,td1);
+								drawtriangle(vd2,nd2,td2);						
+							}					
+							
+							else 
+							{	//do we have to match this sub cell across base cell boundary?								
+								MATCH = false;
+								enum border_positions cb = cl->B;
+								
+								if (cb != INSIDE) 
+								{
+									if ( (cb==l || cb==r || cb==t || cb==b) )
+									{
+										//match across a cardinal direction
+										if ( match_cardinal[(int)cb-4] )
+										{
+											pt1 = &(cl->t1_match);
+											pt2 = &(cl->t2_match);
+											MATCH = true;
+										}
+									}
+									
+									else {
+										//match a sub-cell at the corner of the base cell										
+										enum cardinals C1, C2;
+
+										switch ( cb ) 
+										{
+											case tl: C1 = T; C2 = L; break;
+											case tr: C1 = R; C2 = T; break;
+											case bl: C1 = L; C2 = B; break;
+											case br: C1 = B; C2 = R; break;	
+											default: break;
+										}
+										
+										if (match_cardinal[C1])
+										{
+											MATCH = TRUE;
+											if (match_cardinal[C2]) 
+											{
+												pt1 = &(cl->t1_match_c3);
+												pt2 = &(cl->t2_match_c3);
+											}
+											else 
+											{
+												pt1 = &(cl->t1_match_c1);
+												pt2 = &(cl->t2_match_c1);
+											}
+										}
+										else if (match_cardinal[C2]) 
+										{
+											MATCH = TRUE;
+											pt1 = &(cl->t1_match_c2);
+											pt2 = &(cl->t2_match_c2);
+										}	
+										
+									}
+									
+								} //if (cb != INSIDE)
+								
+								if (MATCH) {
+									for (a=0;a<3;a++) 
+									{
+										memcpy(vd1_match[a],&(pt1->v[a][0]),3*sizeof(float)); 
+										memcpy(vd2_match[a],&(pt2->v[a][0]),3*sizeof(float)); 
+										nd1_match[a] = &(pt1->n[a][0]); nd2_match[a] = &(pt2->n[a][0]);
+										td1_match[a] = &(pt1->t[a][0]); td2_match[a] = &(pt2->t[a][0]);
+										vd1_match[a][0] += translate_x; vd2_match[a][0] += translate_x;
+										vd1_match[a][1] += translate_y; vd2_match[a][1] += translate_y;
+									}																																					
+									drawtriangle(vd1_match,nd1_match,td1_match);
+									drawtriangle(vd2_match,nd2_match,td2_match);
+								}
+								else
+								{
+									drawtriangle(vd1,nd1,td1);
+									drawtriangle(vd2,nd2,td2);
+								}	
+																																
+							}
+						}					
+						cl = cl->next;
+					
+					} //while (cl != NULL)
+					
+					glEnd();
+					
+				} //for (j=0; j<N_LOD_Cells; j++) 						
+			} //for (i=0; i<N_LOD_Cells; i++) 
+			
+		} //for (mb=0; mb<3; mb++)
+	} //for (ma=0; ma<3; ma++) 
+
+	//glEnd();		 
+	
+#ifdef SHOW_LOD_COLORS
+	if (COUNT_CELLS) 
+	{
+		COUNT_CELLS = false;
+		for (int a=0;a<mN_LOD_levels;a++) 
+		{
+			printf("lod = %d, number of LOD cells = %d, total number of tris = %d\n",
+				   a,n_lod_cells[a],n_lod_tris[a]);
+		}
+	}
+	delete [] n_lod_cells;
+	delete [] n_lod_tris;
+	glColor3f(1.0,1.0,1.0);
+#endif
+	
+	glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, no_emission);
+}
+
+float Terrain::getTerrainEdgeSize()
+{
+	return mTerrain_edge_size;
+}
+
+void Terrain::getLODneighbours(int i, int j, int *neigh_i, int *neigh_j)
+{
+	neigh_i[L] = i-1; 	neigh_j[L] = j;
+	neigh_i[R] = i+1; 	neigh_j[R] = j;
+	neigh_i[T] = i; 	neigh_j[T] = j+1;
+	neigh_i[B] = i; 	neigh_j[B] = j-1;
+	for (int a=0;a<4;a++) 
+	{
+		if (neigh_i[a] == mN_regions*mN_LOD_Cells) neigh_i[a] = 0;
+		if (neigh_j[a] == mN_regions*mN_LOD_Cells) neigh_j[a] = 0;
+		if (neigh_i[a] == -1) neigh_i[a] = mN_regions*mN_LOD_Cells-1;
+		if (neigh_j[a] == -1) neigh_j[a] = mN_regions*mN_LOD_Cells-1;
+	}
+}
+
+int Terrain::getLOD(float cx, float cy, float *view_point)
+{
+	//find 2d distance from observer to cell center
+	float x = sqrt(SQR(cx-view_point[0]) + SQR(cy-view_point[1]));					  
+	float xc = mTerrain_edge_size;
+	float slope = 1.0;
+	
+	int l;		
+	if (x<xc) 
+		l=mN_LOD_levels-1;
+	else 
+		l = static_cast<int>((mN_LOD_levels-1)*(1+slope*(1.0-x/xc)));
+	if (l<0) l=0;
+	if (l==mN_LOD_levels) l-=1;	
+	return l;
+}
+
+float Terrain::height(float x, float y)
+{
+	return fouriermap->interpolate(x,y);
+}
+
+int Terrain::getNregions()
+{
+	return mN_regions;
+}
+
+/* work out local normal to surface */
+void Terrain::getLocalNormal(float *normal, float x, float y)
+{
+	float dvec1[3], vec1[3];
+	float dvec2[3], vec2[3];
+	
+	dvec1[0] = dl_terrain; dvec1[1] = 0.0;
+	vec1[0] = x+dvec1[0]; vec1[1] = y+dvec1[1];	
+	wrapDomain(vec1,vec1);
+	dvec1[2] = height(vec1[0], vec1[1]) - height(x,y);
+	
+	dvec2[0] = 0.0; dvec2[1] = dl_terrain;
+	vec2[0] = x+dvec2[0]; vec2[1] = y+dvec2[1];
+	wrapDomain(vec2,vec2);
+	dvec2[2] = height(vec2[0], vec2[1]) - height(x,y);
+	
+	normcrossprod(dvec1,dvec2,normal);	
+}
+
+void Terrain::wrapDomain(float *original, float *wrapped)
+{		
+	int n;	
+	for (int a=0;a<2;a++) 
+	{	
+		wrapped[a] = original[a];
+		if (original[a]>mTerrain_edge_size) 
+		{			
+			n = int(original[a]/mTerrain_edge_size);
+			wrapped[a] -= mTerrain_edge_size*(float)n;			
+		}
+		else if (original[a]<0.0) 
+		{
+			n = 1+abs(int(original[a]/mTerrain_edge_size));
+			wrapped[a] += mTerrain_edge_size*(float)n;
+		}		
+	}
+}
+
+/* Given the border position of a parent cell, return the border positions
+   of the 4 child cells */
+void Terrain::findCellBorders(border_positions *Bc, border_positions Bp)
+{		
+	border_positions bChildren[9][4] = 
+    { 
+    {bl,     b,      INSIDE, l     },  //bl
+    {b,      br,     r,      INSIDE},  //br
+    {INSIDE, r,      tr,     t     },  //tr
+    {l,      INSIDE, t,      tl    },  //tl
+    {l,      INSIDE, INSIDE, l     },  //l
+    {INSIDE, r,      r,      INSIDE},  //r
+    {INSIDE, INSIDE, t,      t     },  //t
+    {b,      b,      INSIDE, INSIDE},  //b
+    {INSIDE, INSIDE, INSIDE, INSIDE}  //INSIDE
+    };
+
+	for (int a=0;a<4;a++)
+		Bc[a] = bChildren[Bp][a];
+}
+
+
+celllink** Terrain::celllink_matrix(long ilr, long ihr, long ilc, long ihc)
+{
+	long i, Nr=ihr-ilr+1,Nc=ihc-ilc+1;
+	celllink **m;
+	
+	m=(celllink **) malloc( (size_t)(Nr)*sizeof(celllink*) );
+	if (!m) memerror("failure A in celllink_matrix()");
+	m -= ilr;
+	m[ilr]=(celllink *) malloc( (size_t)(Nr*Nc)*sizeof(celllink) );
+	if (!m[ilr]) memerror("failure B in celllink_matrix()");
+	m[ilr] -= ilc;
+	
+	for(i=ilr+1;i<=ihr;i++) m[i]=m[i-1]+Nc;
+	return m;
+}
+
+
+void Terrain::free_celllinkmatrix(celllink **m, long ilr, long ihr, long ilc, long ihc)
+{
+	free((char*) (m[ilr]+ilc));
+	free((char*) (m+ilr));
+}
+
+

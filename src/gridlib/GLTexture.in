@@ -1,0 +1,275 @@
+INLINE GbBool
+GLTexture::bind() const
+{ 
+    if (valid_) {
+	glActiveTextureARB(unit_);
+	glEnable(target_);
+	glBindTexture(target_, texture_);
+	setParameter();
+	return true;
+    }
+    return false;
+}
+		
+INLINE GbBool
+GLTexture::bind(GLenum unit) const
+{
+    if (valid_) {
+	glActiveTextureARB(unit);
+	glEnable(target_);
+	glBindTexture(target_, texture_);
+	setParameter();
+	return true;
+    }
+    return false;
+}
+
+INLINE void
+GLTexture::setParameter() const
+{
+    Paramsi::const_iterator iteri=paramsI_.begin();
+    Paramsf::const_iterator iterf=paramsF_.begin();
+    Paramsip::const_iterator iterip=paramsIP_.begin();
+    Paramsfp::const_iterator iterfp=paramsFP_.begin();
+    while (iteri!=paramsI_.end()) {
+	glTexParameteri(target_, (*iteri).first, (*iteri).second);
+	iteri++;
+    }
+    while (iterf!=paramsF_.end()) {
+	glTexParameterf(target_, (*iterf).first, (*iterf).second);
+	iterf++;
+    }
+    while (iterip!=paramsIP_.end()) {
+	glTexParameteriv(target_, (*iterip).first, (*iterip).second);
+	iterip++;
+    }
+    while (iterfp!=paramsFP_.end()) {
+	glTexParameterfv(target_, (*iterfp).first, (*iterfp).second);
+	iterfp++;
+    }
+}
+
+INLINE GLenum
+GLTexture::target() const
+{
+    return target_;
+}
+
+INLINE GLuint
+GLTexture::texture() const
+{
+    return texture_;
+}
+
+INLINE GLenum
+GLTexture::unit() const
+{
+    return unit_;
+}
+
+INLINE void
+GLTexture::priority(const GLclampf *prio) const
+{
+    glPrioritizeTextures(1,&texture_,prio);
+}
+
+INLINE void
+GLTexture::parameter(GLenum pname, GLint i) const
+{ 
+    glTexParameteri(target_, pname, i); 
+}
+
+INLINE void
+GLTexture::parameter(GLenum pname, GLfloat f) const
+{ 
+    glTexParameterf(target_, pname, f); 
+}
+
+INLINE void
+GLTexture::parameter(GLenum pname, GLint * ip) const
+{ 
+    glTexParameteriv(target_, pname, ip); 
+}
+
+INLINE void
+GLTexture::parameter(GLenum pname, GLfloat * fp) const
+{ 
+    glTexParameterfv(target_, pname, fp); 
+}
+
+INLINE GbBool 
+GLTexture::registerParameter(GLenum pname, GLint i)
+{
+    std::pair<Paramsi::iterator,GbBool> result = paramsI_.insert(std::make_pair(pname,i));
+    return result.second;
+}
+
+INLINE GbBool 
+GLTexture::registerParameter(GLenum pname, GLfloat f)
+{
+    std::pair<Paramsf::iterator,GbBool> result = paramsF_.insert(std::make_pair(pname,f));
+    return result.second;
+}
+
+INLINE GbBool 
+GLTexture::registerParameter(GLenum pname, GLint *ip)
+{
+    std::pair<Paramsip::iterator,GbBool> result = paramsIP_.insert(std::make_pair(pname,ip));
+    return result.second;
+}
+
+INLINE GbBool 
+GLTexture::registerParameter(GLenum pname, GLfloat *fp)
+{
+    std::pair<Paramsfp::iterator,GbBool> result = paramsFP_.insert(std::make_pair(pname,fp));
+    return result.second;
+}
+
+INLINE GbBool
+GLTexture::release() const
+{
+    if(valid_) {
+        glActiveTextureARB(unit_);
+	glBindTexture(target_,0);
+        glDisable(target_);
+        // bind the default texture ???
+	return true;
+    }
+    return false;
+}
+
+INLINE GbBool
+GLTexture::release(GLenum unit) const
+{
+    if(valid_) {
+        glActiveTextureARB(unit);
+	glBindTexture(target_,0);
+        glDisable(target_);
+        // bind the default texture ???
+	return true;
+    }
+    return false;
+}
+
+INLINE void
+GLTexture::enable() const
+{ 
+    glEnable(target_); 
+}
+
+INLINE void
+GLTexture::disable() const
+{ 
+    glDisable(target_); 
+}
+
+INLINE GbBool
+GLTexture::create()
+{ 
+    return create(GL_TEXTURE0);
+}
+
+INLINE GbBool
+GLTexture::create(GLenum unit)
+{ 
+    errormsg("don't call GLTexture::create("<<unit<<") directly");
+    return false;
+}
+
+INLINE GbBool
+GLTexture::destroy()
+{ 
+    if(valid_) {
+	glDeleteTextures(1, &texture_); 
+	valid_   = false; 
+        texture_ = 0;
+        unit_    = 0;
+        target_  = 0;
+	delete[] data_; data_=NULL;
+	clearParameter();
+	return true;
+    }
+    return false;
+}
+
+INLINE int 
+GLTexture::getWidth() const 
+{ 
+    return width_; 
+}
+
+INLINE int 
+GLTexture::getHeight() const 
+{ 
+    return height_; 
+}
+
+INLINE void 
+GLTexture::setWidthHeight(int w, int h) 
+{
+    width_=w; 
+    height_=h; 
+}
+
+INLINE int 
+GLTexture::getNumComponents() const 
+{ 
+    return components_; 
+}
+
+INLINE unsigned char* 
+GLTexture::getData() const 
+{ 
+    return data_; 
+}
+
+INLINE unsigned char 
+GLTexture::getR(int x, int y) const 
+{ 
+    return data_[(x+y*width_)*components_]; 
+}
+
+INLINE unsigned char 
+GLTexture::getG(int x, int y) const 
+{ 
+    return data_[(x+y*width_)*components_+1]; 
+}
+
+INLINE unsigned char 
+GLTexture::getB(int x, int y) const 
+{ 
+    return data_[(x+y*width_)*components_+2]; 
+}
+
+INLINE unsigned char 
+GLTexture::getA(int x, int y) const 
+{ 
+    if (components_>3) 
+	return data_[(x+y*width_)*components_+3]; 
+    else 
+	return 255; 
+}
+
+INLINE void
+GLTexture::clearParameter()
+{
+    paramsI_.clear();
+    paramsF_.clear();
+    paramsIP_.clear();
+    paramsFP_.clear();
+}
+
+/*----------------------------------------------------------------------
+|
+| $Log: GLTexture.in,v $
+| Revision 1.4  2006/01/16 12:22:57  DOMAIN-I15+prkipfer
+| added parameter maps
+|
+| Revision 1.2  2005/07/13 11:51:05  DOMAIN-I15+prkipfer
+| updated little OpenGL helper classes
+|
+| Revision 1.1  2004/11/08 11:05:46  DOMAIN-I15+prkipfer
+| introduced GLSL shader and special texture handling classes
+|
+|
++---------------------------------------------------------------------*/

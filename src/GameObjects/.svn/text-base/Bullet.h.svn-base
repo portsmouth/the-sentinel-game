@@ -1,0 +1,76 @@
+
+
+#ifndef BULLET_H
+#define BULLET_H
+
+#include "GameObject.h"
+#include "cylinder.h"
+#include "Timer.h"
+
+//headers for texture handling
+#include "FileUtils.h"
+#include "Filenames.h"
+#include "TextureLibrary.h"
+#include <string>
+#include <iostream>
+using std::string;
+using std::cout;
+using std::endl;
+
+enum Bullet_types {PLAYER_BULLET, ENEMY_BULLET};
+
+class Bullet : public GameObject {
+	
+public:	
+	Bullet(int Bullet_type, string inTextureName); //constructor
+	~Bullet(); //destructor
+	void draw(void);
+	bool move();
+	bool Fire(float *origin, float *fVelocity, float *direction);
+	float getAge();
+	void pauseTimer();
+	void unpauseTimer();
+	bool bulletThreatensEnemy();
+
+private:	
+	Cylinder* AttemptToMove(float *candidate_point);
+	void WrapDomain(float *original, float *wrapped, float tes);
+
+	//kinematics
+	float initial_speed, max_speed, accel;
+	float position[3], speed, velocity[3];
+
+	//misc
+	float dLength;
+	float mirror[9][3];
+	float no_emission[4];
+	
+	//beam trails
+	inline void billboardSphericalBegin(float camX, float camY, float camZ,
+								 float relobjPosX, float relobjPosY, float relobjPosZ);
+	inline void billboardEnd() {
+		// restore the previously 
+		// stored modelview matrix
+		glPopMatrix();
+	}
+	inline float beamshape(float s);
+	inline float beamalpha(float s);
+	
+	int Nbeam, nStack, beam_start, beam_length;
+	float **trail_pos[9];
+	float deg_to_rad, rad_to_deg;
+	float beamwidth, dualbeam_separation, dt_stack;
+	float billb_vertex[4][3];
+	float billb_texcs[4][2];
+	
+	//(warning: add to list in pauseTimer() if adding a new timer)
+	Timer fire_timer;
+	float height, radius, fire_distance;
+	enum Bullet_types bullet_type;
+	/* texturing */
+	Texture *mTexture;
+
+};
+
+#endif //BULLET_H
+

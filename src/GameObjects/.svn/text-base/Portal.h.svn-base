@@ -1,0 +1,69 @@
+
+
+#ifndef PORTAL_H
+#define PORTAL_H
+
+#include "GameObject.h"
+#include "Timer.h"
+
+enum Portal_States {PORTAL_OPENING, PORTAL_OPEN, PORTAL_CLOSING, PORTAL_CLOSED, PORTAL_HYPERSPACE};
+
+class World;
+
+class Portal : public GameObject {
+	
+public:	
+	
+	Portal(); //constructor
+	~Portal(); //destructor
+
+	void draw(void);
+	
+	void Init();
+	
+	void Open();
+	
+	void Close();
+
+	Portal_States Update();
+	
+	Portal_States GetState();
+
+	float getAlpha();
+	
+	bool PlayerEntered();
+	
+	void PauseTimers();
+	
+	void UnpauseTimers();
+		
+private:
+		
+	void initialposition();
+	
+	float terrain_edge_size;
+	
+	bool checkEdge(float *pos);
+	
+	void computeVertices(float currentlength);
+	
+	//(warning: add to list in PauseTimers() if adding a new timer)
+	Timer openingTimer, openTimer, closingTimer;
+	
+	enum Portal_States state;
+	
+	float portal_center[2], portal_direction[3];
+	float portal_normal[3], zaxis[3];
+	float portal_mirror_center[9][2], portal_chamber_center[2];
+	float portal_vertex[4][3], portal_mirror_vertex[9][4][3];
+	float portal_finallength, portal_currentlength, portal_height;
+	float portal_chamber_depth, boundingcircle;
+	float terrain_height, lowheight, topheight;
+	float no_emission[4];
+	World *theWorld;
+	
+
+};
+
+#endif //PORTAL_H
+

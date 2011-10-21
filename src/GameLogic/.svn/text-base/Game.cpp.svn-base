@@ -1,0 +1,443 @@
+
+
+#include "world.h"
+#include "EventManager.h"
+#include "Player.h"
+#include "SDLview.h"
+#include "HUD.h"
+#include "Font.h"
+#include "Titles.h"
+#include "Sound.h"
+#include "TextureLibrary.h"
+#include "Controls.h"
+#include "Timer.h"
+#include "Portal.h"
+#include "Hyperspace.h"
+
+#include "Game.h"
+
+//	*** STATIC MEMBERS
+Game*           Game::pGame           = NULL;
+EventManager*   Game::pEventManager   = NULL;
+World*          Game::pWorld          = NULL;
+Player*         Game::pPlayer         = NULL;
+SDLview*        Game::pSDLview        = NULL;
+HUD*            Game::pHUD            = NULL;
+Font*           Game::pFont           = NULL;
+Titles*         Game::pTitles         = NULL;
+Sound*          Game::pSound          = NULL;
+TextureLibrary* Game::pTextureLibrary = NULL;
+Portal*         Game::pPortal         = NULL;
+Controls*       Game::pControls       = NULL;
+Hyperspace*     Game::pHyperspace     = NULL;
+
+Game::Game() :
+sdlview_instance(1), //0=windowed, 1=fullscreen
+eventmanager_instance(),
+player_instance(),
+hud_instance(),
+font_instance(),
+titles_instance(),
+sound_instance(),
+texturelibrary_instance(),
+portal_instance(),
+controls_instance()
+{
+	if(pGame) {
+		printf("Game already exists...\n");
+		exit(1);		
+	}
+	pGame = this;
+		
+	pEventManager   = &eventmanager_instance;
+	pSDLview        = &sdlview_instance;
+	pPlayer         = &player_instance;	
+	pHUD            = &hud_instance;
+	pFont           = &font_instance;
+	pTitles         = &titles_instance;
+	pSound          = &sound_instance;
+	pTextureLibrary = &texturelibrary_instance;
+	pPortal         = &portal_instance;
+	pControls       = &controls_instance;
+}
+
+//serve pointers to the main game classes
+Game*           Game::getGame()                     {return pGame;}
+EventManager*   Game::getEventManager()     {return pEventManager;}
+World*          Game::getWorld()                   {return pWorld;}
+Player*         Game::getPlayer()                 {return pPlayer;}
+SDLview*        Game::getSDLview()               {return pSDLview;}
+HUD*            Game::getHUD()                       {return pHUD;}
+Font*           Game::getFont()                     {return pFont;}
+Titles*         Game::getTitles()                 {return pTitles;}
+Sound*          Game::getSound()                   {return pSound;}
+TextureLibrary* Game::getTextureLibrary() {return pTextureLibrary;}
+Portal*         Game::getPortal()                 {return pPortal;}
+Controls*       Game::getControls()             {return pControls;}
+Hyperspace*     Game::getHyperspace()         {return pHyperspace;}
+
+int Game::getLevel() {return level;}
+
+//destructor
+Game::~Game() {}
+
+void Game::mainLoop()
+{		
+	pFont->LoadFontTextures();
+	pTitles->LoadTitlesTextures();
+	
+	int done = 0;	
+	while ( !done ) 
+	{
+		
+		/* display title screen  */
+		SDL_ShowCursor(SDL_ENABLE);
+		int request = 0;
+		pTitles->drawTitleScreen();
+		while (!request)
+			pTitles->checkTitleEvents(&request);
+		
+		switch (request) 
+		{
+			case 3:  //quit
+				done = 1;
+				break;
+			case 2: //options screen
+				break;
+			
+			case 1:  //new game
+				
+				level = 1;
+				pPlayer->resetScore();
+				
+				do 
+				{	
+					/* play a game level */
+					ls = playLevel();
+					level++;					
+				} while (ls==LEVEL_ADVANCE);
+					
+				if (ls==LEVEL_GAMEOVER) 
+					printf("game over\n");
+				else 
+					printf("error: level state %d unknown\n",ls);
+					
+				//exit game to title screen
+				break;	
+		}	
+					
+	}  //while ( !done )
+		
+	//quit!
+		
+}
+
+const float LEVEL_LOADING_MIN_TIME = 1.5;
+
+level_status Game::playLevel()
+{
+	Timer levelloadingTimer, levelEntryTimer;
+	levelloadingTimer.start();
+	pTitles->drawLevelLoadingScreen(level);
+	
+	//create level
+	pWorld = new World(level);
+	pWorld->Init();
+
+	//prepare inter-level hyperspace 
+	pHyperspace = new Hyperspace(level);
+
+	pPlayer->InitObserver();
+	pEventManager->setup();
+	pPortal->Init();	
+	pHUD->init();
+	
+	//level loading screen appears for a minimum of LEVEL_LOADING_MIN_TIME secs
+	while (levelloadingTimer.time()<LEVEL_LOADING_MIN_TIME) 
+		pTitles->drawLevelLoadingScreen(level);
+	
+	SDL_ShowCursor(SDL_DISABLE);
+	gameGLsettings();
+		
+	//play sound indicating level entry
+	pSound->PlayGeneralSound(EnterGrid,1.0);
+	LET.start();
+	
+	enum Player_States ps  = pPlayer->GetState();	
+	enum Enemy_States  es  = pWorld->enemy.GetState();
+	enum UserAction action = NOACTION;
+	
+	LFT.start();
+	
+	ls = LEVEL_INPROGRESS;
+	
+	while (ls==LEVEL_INPROGRESS || ls==LEVEL_HYPERSPACE)
+	{	
+		switch (action) 
+		{						
+			case NOACTION:				
+				action = update(&ps,&es,&ls);
+				break;
+				
+			case PAUSE:				
+				action = pause(&ps,&es,&ls);	
+				break;
+		}						
+	}
+				
+	//destroy this level's world and hyperspace
+	delete pWorld;
+	delete pHyperspace;
+	return ls;
+	
+}
+	
+/* implements "fixed interval" time-based animation (i.e. variable number of game updates per frame) */
+const float MAXI = MCPF*UINT;
+
+UserAction Game::update(Player_States *ps, 
+						Enemy_States *es, 
+						level_status *ls)
+{
+	enum UserAction action = NOACTION;
+	
+	static double clo = 0.0; //cyclesLeftOver
+	
+	double iup = LFT.time() + clo; //updateIterations
+	if (iup > MAXI) iup = MAXI;
+				
+	while (iup > UINT) 
+	{
+		iup -= UINT;																					
+		
+		//if player is respawning or dead we don't want to check input
+		if (*ps!=PLAYER_RESPAWNING && *ps!=PLAYER_KILLED) 
+		{
+			action = pControls->checkUserInput(pPlayer, *ls);
+			//break out of update cycle if user requests a pause
+			if (action==PAUSE) break;
+		}
+		
+		//main update of game world
+		pEventManager->doActive(ps, es, ls);
+	}
+							
+	//keep track of time left over
+	clo = iup;
+	LFT.start();
+	
+	if (*ls==LEVEL_GAMEOVER) return action;
+	if (action==PAUSE) return action;
+	
+	//draw the game world and HUD
+	drawFrame();
+	
+	switch (*ps) 
+	{																
+		case PLAYER_RESPAWNING:								
+			pTitles->drawPlayerShotOverlay();
+			break;									
+		
+		case PLAYER_KILLED:
+			pTitles->drawGameOverOverlay();
+			break;	
+			
+		case PLAYER_HS_FAILED:
+			pTitles->drawHSFailedOverlay();
+			break;
+			
+		default:
+			break;
+	}	
+				
+	//information overlays on top of action
+	pSDLview->drawFPS();
+				
+	SDL_GL_SwapBuffers ();
+				
+	// report any GL errors:			
+	GLenum gl_error = ::glGetError();
+	if(gl_error != GL_NO_ERROR)
+		fprintf(stderr, "EncounterX: OpenGL error: %d\n", (int)gl_error);
+				
+	char *sdl_error = ::SDL_GetError();
+	if(sdl_error[0] != '\0')
+	{
+		fprintf(stderr, "Encounter: SDL error '%s'\n", sdl_error);
+		::SDL_ClearError();
+	}
+	
+	return action;
+}				
+
+const float fog_color_LEVEL[]      = {0.02, 0.02, 0.02, 1.0};
+const float fog_color_HYPERSPACE[] = {0.0, 0.0, 0.0, 1.0};
+
+const float LEVEL_FADEIN_TIME = 3.0;
+
+void Game::drawFrame()
+{
+	/* draw scene */			
+	glEnable(GL_LIGHTING);
+	glShadeModel(GL_SMOOTH);	
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_FOG);
+    glEnable(GL_LIGHTING);
+		
+	switch (ls) 
+	{
+		case LEVEL_INPROGRESS:			
+			
+			glFogfv(GL_FOG_COLOR, fog_color_LEVEL);
+			glClearColor(fog_color_LEVEL[0], fog_color_LEVEL[1], fog_color_LEVEL[2], 0.0);
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);	
+			
+			pPlayer->SetObserverProjection();
+			pWorld->draw();		
+			
+			/* draw game info display (HUD) */
+			pHUD->display();
+			
+			//draw fade-in overlay if level just started
+			pTitles->drawLevelFadeInOverlay( 1.0-LET.time()/LEVEL_FADEIN_TIME );
+			
+			break;			
+
+		case LEVEL_HYPERSPACE:			
+			
+			glFogfv(GL_FOG_COLOR, fog_color_HYPERSPACE);
+			glClearColor(fog_color_HYPERSPACE[0], fog_color_HYPERSPACE[1], fog_color_HYPERSPACE[2], 0.0);
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);	
+			
+			pPlayer->SetObserverProjection_HS();
+			pHyperspace->draw();
+			//pHUD->display();
+			break;
+	
+		default:
+			printf("error: unknown level state %d\n",ls);
+			exit(1);
+			break;
+	}
+	
+}
+
+void Game::gameGLsettings()
+{
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(GL_TRUE);
+	glShadeModel(GL_SMOOTH);	
+	glEnable(GL_POLYGON_SMOOTH);
+	glDisable(GL_BLEND);
+	
+	glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+	glEnable(GL_LIGHT1);
+	glEnable(GL_LIGHT2);
+	glEnable(GL_LIGHT3);
+	glEnable(GL_LIGHT4);
+	
+	float ambient0[] = {0.1, 0.1, 0.1, 1.0};
+    float diffuse0[] = {1,1,1, 1.0};
+	float specular0[] = {0.5, 0.5, 0.5, 1.0};
+	float position0[] = {1, 0, 0.0, 1.0};
+	
+	static float ambient[5][4];
+	static float diffuse[5][4];
+	static float specular[5][4];
+	static float position[5][4];				
+	
+	for (int a=0;a<5;a++) {			
+		position[a][0] = position0[0];
+		position[a][1] = position0[1];
+		position[a][2] = position0[2];	
+	}
+	position[1][0] = position0[0] + 1.0;
+	position[2][1] = position0[1] + 1.0;
+	position[3][0] = position0[0] - 1.0;
+	position[4][1] = position0[1] - 1.0;
+	
+	for (int a=0;a<5;a++) {			
+		for (int b=0;b<4;b++) {	
+			ambient[a][b]  = ambient0[b];
+			diffuse[a][b]  = diffuse0[b];
+			specular[a][b] = specular0[b];				
+		}
+	}
+	
+	glLightfv(GL_LIGHT0, GL_AMBIENT, ambient[0]);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, diffuse[0]);
+	glLightfv(GL_LIGHT0, GL_SPECULAR, specular[0]);
+    glLightfv(GL_LIGHT0, GL_POSITION, position[0]);	
+	
+	glLightfv(GL_LIGHT1, GL_AMBIENT, ambient[1]);
+    glLightfv(GL_LIGHT1, GL_DIFFUSE, diffuse[1]);
+	glLightfv(GL_LIGHT1, GL_SPECULAR, specular[1]);
+    glLightfv(GL_LIGHT1, GL_POSITION, position[1]);	
+	
+	glLightfv(GL_LIGHT2, GL_AMBIENT, ambient[2]);
+    glLightfv(GL_LIGHT2, GL_DIFFUSE, diffuse[2]);
+	glLightfv(GL_LIGHT2, GL_SPECULAR, specular[2]);
+    glLightfv(GL_LIGHT2, GL_POSITION, position[2]);	
+	
+	glLightfv(GL_LIGHT3, GL_AMBIENT, ambient[3]);
+    glLightfv(GL_LIGHT3, GL_DIFFUSE, diffuse[3]);
+	glLightfv(GL_LIGHT3, GL_SPECULAR, specular[3]);
+    glLightfv(GL_LIGHT3, GL_POSITION, position[3]);	
+	
+	glLightfv(GL_LIGHT4, GL_AMBIENT, ambient[4]);
+    glLightfv(GL_LIGHT4, GL_DIFFUSE, diffuse[4]);
+	glLightfv(GL_LIGHT4, GL_SPECULAR, specular[4]);
+    glLightfv(GL_LIGHT4, GL_POSITION, position[4]);	
+	
+    glEnable(GL_FOG);
+	glFogi(GL_FOG_MODE, GL_EXP);
+	glFogf(GL_FOG_DENSITY, 3.0);
+
+}
+
+
+UserAction Game::pause(Player_States *ps, 
+					   Enemy_States *es, 
+					   level_status *ls)
+{
+	enum UserAction action = PAUSE;
+	
+	/* display pause overlay and current frame */
+	LFT.pause();
+	LET.pause();
+	pPlayer     ->PauseTimers();
+	pWorld      ->PauseTimers();
+	pPortal     ->PauseTimers();
+	pControls   ->PauseTimers();
+	pHUD        ->PauseTimers();
+	pHyperspace ->PauseTimers();
+				
+	SDL_ShowCursor(SDL_ENABLE);
+	pTitles->drawPauseOverlay();
+				
+	int pause_choice = 0;
+	while (!pause_choice) pTitles->checkPauseEvents(&pause_choice);
+				
+	switch (pause_choice) {									
+		case 1:  //resume
+			action = NOACTION;
+			
+			LFT.unpause();
+			LET.unpause();
+			pPlayer     ->UnpauseTimers();
+			pWorld      ->UnpauseTimers();
+			pPortal     ->UnpauseTimers();
+			pControls   ->UnpauseTimers();
+			pHUD        ->UnpauseTimers();
+			pHyperspace ->UnpauseTimers();
+			
+			SDL_ShowCursor(SDL_DISABLE);
+			break;
+			
+		case 2: //quit
+			*ls = LEVEL_GAMEOVER;
+			break;
+	}			
+	return action;
+}

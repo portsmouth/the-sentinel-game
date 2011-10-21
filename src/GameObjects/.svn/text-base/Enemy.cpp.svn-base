@@ -1,0 +1,943 @@
+
+#include "Game.h"
+#include "geometry.h"
+#include "Bullet.h"
+#include "Enemy.h"
+
+//number of enemy lives per level
+#define NUM_ENEMY_LIVES 5
+
+#define ENEMY_THINK_TIME 0.08
+#define ENEMY_DECISION_TIME 2.0
+#define ENEMY_SAFETIME 1.0 //stop defending if player doesn't fire for this amount of time
+#define ENEMY_RESPAWN_TIME 4.0
+#define ENEMY_ACTIVATION_TIME 4.0
+#define ENEMY_FIRE_TIME 0.2
+
+#define MAX_ENEMY_SIGHT 0.25
+#define DANGEROUSPLAYERPROXITY 0.05
+#define MIN_ENEMYPLAYER_APPROACH 0.075
+
+//#define ENEMY_DEBUG_OUTPUT
+
+
+float ran2(long *idum);
+
+inline float SQR(float x) 
+{
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+
+Enemy::Enemy() //constructor
+{
+	height = 1.25e-2;
+	radius = 1.5e-2;
+	hover_height = 0.5*height + 0.25*height;
+	min_cylinder_approach = 0.1*radius;
+	speed = 0.3;
+	seed = -8;
+
+	nLives = NUM_ENEMY_LIVES;
+	stucknexttocylinder = false;
+	FIRED_FIRST_SHOT = false;
+
+	float mat_shin[1] = {10.0};
+	float mat_spec[4] = {0.5, 0.6, 0.9, 1.0};	
+	float mat_diff[4] = {0.3, 0.3, 0.8, 1.0};
+	float mat_ambi[4] = {0.1, 0.1, 0.2, 1.0};
+	float mat_emis[4] = {0.0, 0.0, 0.0, 1.0};
+	mat_shininess[0] = mat_shin[0];
+	for (int a=0;a<3;a++) {
+		mat_specular[a] = mat_spec[a];
+		mat_diffuse[a] = mat_diff[a];
+		mat_ambient[a] = mat_ambi[a];
+		mat_emission[a] = mat_emis[a];
+	}	
+	
+	deg_to_rad = M_PI/180.0;
+	rad_to_deg = 180.0/M_PI;
+	zaxis[0] = 0.0;
+	zaxis[1] = 0.0;
+	zaxis[2] = 1.0;
+}
+
+
+
+
+/*******************************************************************************/
+/*                            low level                                        */
+/*******************************************************************************/
+
+void Enemy::draw(void)
+{
+	Player *player = Game::getPlayer();
+	
+	float *view_point = player->GetViewPoint();
+	
+	glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, mat_shininess);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, mat_specular);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, mat_diffuse);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, mat_ambient);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, mat_emission);
+	
+	glEnable(GL_LIGHTING);
+	glShadeModel (GL_SMOOTH);
+	glEnable(GL_DEPTH_TEST);
+	glDisable(GL_TEXTURE_2D);
+		
+	World *theWorld = Game::getWorld();		
+	float localnorm[3];
+	theWorld->terrain->getLocalNormal(localnorm,position[0],position[1]);
+	float costheta = localnorm[2];
+	//TO DO: do we need to worry (here and elsewhere) about possibility than fabs(costheta)>1.0 
+	//       (and other trig functions) due to loss of precision (thus crash in acos()  (actually no crash) ) ?
+ 	float theta = rad_to_deg*acos(costheta);
+	float rotaxis[3];
+	
+	normcrossprod(localnorm,zaxis,rotaxis);
+	
+	glPushMatrix();	
+	drawCone (position,height,-theta,rotaxis,radius,20,1);
+	drawCone (position,height,-theta,rotaxis,radius,20,-1);
+	glPopMatrix();
+	
+	// draw 8 reflected copies too, if visible 
+	float tes = theWorld->terrain->getTerrainEdgeSize();
+				
+	float mirror[9][3];
+	for (int a=0;a<3;a++) {
+		for (int b=0;b<3;b++) {			
+			mirror[a+3*b][0] = position[0] + ((float)a-1.0)*tes;
+			mirror[a+3*b][1] = position[1] + ((float)b-1.0)*tes;	
+			mirror[a+3*b][2] = position[2];
+		}				
+	}
+	
+	for (int a=0;a<9;a++)
+		if (visible(mirror[a],view_point,tes) && a!=4) 
+		{
+			glPushMatrix();	
+			drawCone (mirror[a],height,-theta,rotaxis,radius,20,1);
+			drawCone (mirror[a],height,-theta,rotaxis,radius,20,-1);
+			glPopMatrix();
+		};
+	
+	/*
+	if (LOOKING) {		
+		float low = 0.05*height;
+		glDisable(GL_LIGHTING);
+		glDisable(GL_TEXTURE_2D);
+		glColor3f(1.0,0.0,0.0);
+		glBegin(GL_LINES);	
+		glVertex3f(view_point[0],view_point[1],low);
+		glVertex3f(lookingat[0],lookingat[1],low);
+		glEnd();
+		glColor3f(1.0,1.0,1.0);			
+	}
+	 */				
+}
+
+void Enemy::SetState(Enemy_States newState)
+{
+	state = (Enemy_States)newState;
+}
+
+Enemy_States Enemy::GetState()
+{
+	return (Enemy_States)state;
+}
+
+int Enemy::GetLives()
+{
+	return nLives;
+}
+
+Enemy::~Enemy() //destructor
+{}
+
+/* choose a random enemy position which does not lie inside a cylinder, and velocity */
+void Enemy::initialposition()
+{
+	World *theWorld = Game::getWorld();	
+	
+	static long seed = -50;
+	float tes = theWorld->terrain->getTerrainEdgeSize();
+	bool collision;
+	do {
+		position[0] = ran2(&seed)*tes;
+		position[1] = ran2(&seed)*tes;
+		collision = theWorld->TestCollision_EnemyCylinder(position,radius);
+	} while (collision);		
+	position[2] = hover_height + theWorld->terrain->height(position[0],position[1]);	
+	
+	double phi = acos(2.0*ran2(&seed)-1.0);
+	velocity[0] = speed*(float)cos(phi);
+	velocity[1] = speed*(float)sin(phi);
+}
+
+void Enemy::WrapDomain(float *original, float *wrapped, float tes)
+{		
+	int n;	
+	for (int a=0;a<2;a++) 
+	{	
+		wrapped[a] = original[a];
+		if (original[a]>tes) 
+		{			
+			n = int(original[a]/tes);
+			wrapped[a] -= tes*(float)n;			
+		}
+		else if (original[a]<0.0) 
+		{
+			n = 1+abs(int(original[a]/tes));
+			wrapped[a] += tes*(float)n;
+		}		
+	}
+}
+
+
+Cylinder* Enemy::AttemptToMove(float *candidate_point)
+{
+	World *theWorld = Game::getWorld();				
+	
+	//see if there is a collision at candidate position or not
+	Cylinder* pCyl = theWorld->TestCollision_EnemyCylinder(candidate_point,radius);
+	
+	if (pCyl==NULL) 
+	{
+		//if not, just move bullet to candidate position
+		for (int a=0;a<2;a++)
+			position[a] = candidate_point[a];
+	}
+	
+	return pCyl;
+}
+
+
+bool Enemy::timeforathink()
+{
+	return thinkTimer.time()>ENEMY_THINK_TIME;
+}
+
+
+//if I am stuck next a cylinder, work out a new velocity vector
+//to move away from cylinder (currently just directly away from it)
+void Enemy::unstickFromCylinder()
+{
+	//find the location of the cylinder I am stuck next to
+	float *cylpos = cylinder_nexto->position;
+	
+	//form a vector (at my position) pointing away from cylinder
+	float newdirect[2];
+	for (int a=0;a<2;a++)
+		newdirect[a] = position[a]-cylpos[a];
+
+	normalize2d(newdirect);		
+	for (int a=0;a<2;a++)
+		velocity[a] = newdirect[a]*speed;
+	
+	//so I'm no longer stuck
+	stucknexttocylinder = false;
+}
+
+
+
+/* is player visible? */
+bool Enemy::LookForPlayer()
+{
+	
+	World *theWorld = Game::getWorld();				
+	float tes = theWorld->terrain->getTerrainEdgeSize();
+	
+	Player *player = Game::getPlayer();
+	float *player_pos = player->GetViewPoint();		
+	
+	/*
+	 construct rays from the enemy to all 9 mirror player positions.
+	 If minimum mirror distance>MAX_ENEMY_SIGHT, player is not visible.
+	 I assume MAX_ENEMY_SIGHT<0.5*terrain_edge_size so that only one mirror ray can be visible.	
+	 */
+	float mirror[9][3];
+	bool FOUND_RAY = false;
+	int visible_mirror;
+	for (int a=0;a<3;a++) {
+		for (int b=0;b<3;b++) {			
+			mirror[a+3*b][0] = player_pos[0] + ((float)a-1.0)*tes;
+			mirror[a+3*b][1] = player_pos[1] + ((float)b-1.0)*tes;	
+			mirror[a+3*b][2] = player_pos[2];
+			if (visible(mirror[a+3*b],position,MAX_ENEMY_SIGHT)) {
+				visible_mirror = a+3*b;
+				FOUND_RAY = true;
+			}
+			if (FOUND_RAY) break;
+		}	
+		if (FOUND_RAY) break;
+	}
+	
+	LOOKING = false;
+	if (FOUND_RAY) {
+		
+		float visible_ray[3]; //ray from enemy to selected mirror player position
+		float visible_ray_dir[3]; //unit vector directed along the ray
+		for (int a=0;a<3;a++) {
+			visible_ray[a] = mirror[visible_mirror][a] - position[a];
+			visible_ray_dir[a] = visible_ray[a];
+			lastknown_playerpos[a] = mirror[visible_mirror][a];
+		}
+		lastknown_playerdistance = magnitude(visible_ray);
+		normalize(visible_ray_dir);
+		
+		LOOKING = true;
+		for (int a=0;a<3;a++) {
+			lookingat[a] = player_pos[a] - visible_ray[a];
+			view_dir[a] = visible_ray_dir[a];
+		}
+		
+		/* We found a mirror ray which is potentially visible.
+			Now we must check whether or not a cylinder blocks the view. */
+		
+		/* Break ray into intervals of length less than terrain_edge_size/COLLISION_GRID */		
+		float visible_ray_length = magnitude(visible_ray);		
+		int Nintervals = 1+(int)(visible_ray_length/(tes/COLLISION_GRID));
+		float interval_length = visible_ray_length/(float)Nintervals;		
+		
+		float interval_point[3], interval_end[3];
+		/* loop through each interval point, test each for cylinder collision */
+		bool collide = false;
+		for (int n=0;n<Nintervals;n++) {
+			
+			for (int a=0;a<3;a++) {
+				interval_point[a] = position[a] + (float)n*interval_length*visible_ray_dir[a];
+				interval_end[a] = interval_point[a] + (float)interval_length*visible_ray_dir[a];
+			}
+			
+			collide = theWorld->TestCollision_RayCylinder(interval_point,interval_end);
+			if (collide) break;
+		}
+		
+		if (collide) {
+#ifdef ENEMY_DEBUG_OUTPUT
+			printf("enemy line of sight to player is blocked by cylinder\n");
+#endif //ENEMY_DEBUG
+			return false;
+		}
+		else {
+#ifdef ENEMY_DEBUG_OUTPUT
+			printf("enemy has clear line of sight to player\n");
+#endif //ENEMY_DEBUG
+			return true;
+			
+		}
+		
+		/* TO DO: Player is actually visible only if enemy sight cone contains player position. 
+			enemy can only rotate line of sight at some angular velocity, indicated
+			by "eyes" attatched to enemy */
+		
+	}
+	else {
+#ifdef ENEMY_DEBUG_OUTPUT
+		printf("player is too far away to be visible to enemy\n");	
+#endif //ENEMY_DEBUG
+		return false;
+	}	
+}
+
+
+/* check whether a player bullet is headed for a collision with the enemy */
+bool Enemy::LookForPlayerBullets()
+{
+	World *theWorld = Game::getWorld();		
+	Bullet *pBullet;
+	
+	for (vector<GameObject*>::iterator iter = theWorld->player_bullets.begin(); 
+		 iter != theWorld->player_bullets.end(); ++iter) 
+	{
+		if ( (pBullet = dynamic_cast<Bullet*> (*iter)) )
+			if ( pBullet->bulletThreatensEnemy() ) return true;
+	}
+	return false;
+}
+
+
+void Enemy::getCollisiongridIndices(float *position2d, int *n, int *m, float tes)
+{
+	*n = int((float)COLLISION_GRID*position2d[0]/tes);
+	*m = int((float)COLLISION_GRID*position2d[1]/tes);	
+	if (*n==COLLISION_GRID) *n-=1;
+	if (*m==COLLISION_GRID) *m-=1;
+}
+
+
+bool Enemy::TestCollisionBullet(float *candidate_point, float bulletRadius)
+{
+	float sqrdist = 0.0;
+	for(int a=0;a<2;a++)
+		sqrdist += SQR(candidate_point[a]-position[a]); 
+	return (sqrdist<=SQR(radius+bulletRadius));
+}
+
+void Enemy::PauseTimers()
+{
+	thinkTimer.pause();
+	shotTimer.pause();
+	deathTimer.pause();
+	fireTimer.pause();
+	activateTimer.pause();
+	decisionTimer.pause();
+}
+
+void Enemy::UnpauseTimers()
+{
+	thinkTimer.unpause();
+	shotTimer.unpause();
+	deathTimer.unpause();
+	fireTimer.unpause();
+	activateTimer.unpause();
+	decisionTimer.unpause();
+}
+
+
+/*******************************************************************************/
+/*                           Enemy actions                                     */
+/*******************************************************************************/
+
+
+bool Enemy::move()
+{		
+	World *theWorld = Game::getWorld();				
+	
+	float candidate_point[2];
+	for (int a=0;a<2;a++)
+		candidate_point[a] = position[a] + UINT*velocity[a];
+		
+	//check for cylinder collisions
+	Cylinder *pCyl;
+	pCyl = AttemptToMove(candidate_point);
+	
+	//if there is a collision with a cylinder, move enemy to point just outside cylinder, and stop
+  	bool cylinder_collision;
+	bool error_detect = false;
+	if (pCyl!=NULL) {	
+		
+		cylinder_collision = true;
+		stucknexttocylinder = true;
+		cylinder_nexto = pCyl;
+		
+		//A collision occurred with cylinder pointed to by pCyl. Find position of the cylinder
+		float *cylpos = pCyl->position;
+				
+		//given current position of enemy and cylinder, and enemy velocity, find position of impact
+		float A,B,L;	
+		//compute A
+		float *vnorm = new float[2];
+		memcpy(vnorm,velocity,2*sizeof(float));
+		normalize2d(vnorm);				
+		float cyldist[2];
+		for (int a=0;a<2;a++) {
+			cyldist[a] = cylpos[a] - position[a];
+		}
+		A = scalarprod2d(vnorm,cyldist);
+		
+		//compute B;
+		float cyldist_sqrmag = scalarprod2d(cyldist,cyldist);		
+		float cylinder_radius = pCyl->getRadius();
+				
+		B = cyldist_sqrmag - SQR(cylinder_radius + radius);
+		
+		if (B<0.0) {
+			//whoops! current enemy position is inside cylinder
+#ifdef ENEMY_DEBUG_OUTPUT
+			printf("error: failed to detect enemy-cylinder collision\n");
+			printf("enemy candidate position: %f %f\n",candidate_point[0],candidate_point[1]);
+			printf("cylinder position: %f %f\n",cylpos[0],cylpos[1]);
+			printf("enemy position: %f %f\n",position[0],position[1]);
+			printf("cyldist_sqrmag , cylinder radius: %f %f\n",cyldist_sqrmag,cylinder_radius);
+			printf("enemy radius: %f\n",radius);
+			printf("\n");
+#endif //ENEMY_DEBUG
+			error_detect = true;
+		}
+		
+		//compute L
+		double discr = (double)(SQR(A) - SQR(B));
+		
+		if (discr<0.0) {
+			//enemy misses cylinder - should not occur since at candidate position 
+			//enemy was found to collide with cylinder.
+#ifdef ENEMY_DEBUG_OUTPUT
+			printf("error: spurious enemy-cylinder collision\n");
+#endif //ENEMY_DEBUG
+			error_detect = true;
+		}
+		else {
+			L = A - (float)sqrt(discr);
+		}
+		
+		if(!error_detect) 
+		{			
+			//move enemy to point just before it touches boundary of cylinder
+			if (L>min_cylinder_approach) 
+			{
+				for (int a=0;a<2;a++)
+					position[a] += (L-min_cylinder_approach)*vnorm[a];
+			}
+		}		
+		delete [] vnorm;
+	}
+	else cylinder_collision = false;
+
+	if(error_detect) 
+	{			
+		//if there was an error while detecting collision, just move enemy forward,
+		//thus avoiding disaster
+		for (int a=0;a<2;a++) 
+			position[a] = candidate_point[a];
+	}
+	
+	position[2] = hover_height + theWorld->terrain->height(position[0],position[1]);	
+
+	//wrap new enemy position into central domain
+	float tes = theWorld->terrain->getTerrainEdgeSize();
+	WrapDomain(position,position,tes);
+	
+	return cylinder_collision;
+}
+
+void Enemy::kill()
+{
+	shotTimer.start();
+	state = (Enemy_States)ENEMY_RESPAWNING;	
+	--nLives;
+	
+	if (nLives==0) 
+	{
+		state = ENEMY_KILLED;
+		deathTimer.start();
+	}
+	
+	Sound *soundplayer = Game::getSound();
+	float soundvolume = soundplayer->ComputeSoundVolume(position);
+	soundplayer->PlayGeneralSound(Enemy_destroyed,soundvolume);
+	
+	//turn off 'enemy-active' HUD scanner light
+	HUD *pHUD = Game::getHUD();
+	pHUD->setLight(GREEN_SL,SL_OFF);
+}
+
+
+void Enemy::Activate()
+{	
+	state = (Enemy_States)ENEMY_ACTIVATING;
+	activateTimer.start();
+}
+
+void Enemy::ReadyToActivate()
+{
+	bool success = (activateTimer.time()>ENEMY_ACTIVATION_TIME);
+	if (success) 
+	{
+		state = (Enemy_States)ENEMY_ALIVE;
+		initialposition();
+		behaviour = ENEMY_SEARCHING;
+		thinkTimer.start();
+		//turn on HUD scanner light to indicate enemy active
+		HUD *pHUD = Game::getHUD();
+		pHUD->setLight(GREEN_SL,SL_ON);				
+	}
+}
+
+
+void Enemy::TrytoRespawn()
+{
+	bool success = (shotTimer.time()>ENEMY_RESPAWN_TIME);
+	
+	if (success) 
+	{
+#ifdef ENEMY_DEBUG_OUTPUT
+		printf("enemy respawned\n");
+#endif //ENEMY_DEBUG
+		state = (Enemy_States)ENEMY_ALIVE;
+		initialposition();
+		think(); //have a think just after respawning
+		//turn on HUD scanner light to indicate enemy active (again)
+		HUD *pHUD = Game::getHUD();
+		pHUD->setLight(GREEN_SL,SL_ON);		
+	}
+} 
+
+/* restart the enemy with full lives if player misses the level portal */
+void Enemy::Resurrect()
+{
+	nLives = NUM_ENEMY_LIVES;
+	state = (Enemy_States)ENEMY_ALIVE;
+	initialposition();
+	think();
+	//turn on HUD scanner light to indicate enemy active (again)
+	HUD *pHUD = Game::getHUD();
+	pHUD->setLight(GREEN_SL,SL_ON);	
+#ifdef ENEMY_DEBUG_OUTPUT
+	printf("enemy resurrected\n");
+#endif //ENEMY_DEBUG
+}
+
+
+void Enemy::fire()
+{			
+	if (fireTimer.time()>ENEMY_FIRE_TIME || !FIRED_FIRST_SHOT)
+	{		
+#ifdef ENEMY_DEBUG_OUTPUT
+		printf("enemy fire!\n");
+#endif //ENEMY_DEBUG
+		
+		FIRED_FIRST_SHOT = true;
+		fireTimer.start();
+		
+		/* fire bullet in current view direction, which should be
+			towards where player was most recently seen. */
+		//TO DO: enemy aim should be imperfect
+		//TO DO: perhaps add enemy velocity to bullet velocity
+		
+		World *theWorld = Game::getWorld();				
+		theWorld->createEnemyBullet(position,velocity,view_dir);			
+		
+	}
+}
+
+
+/*******************************************************************************/
+/*                               Enemy AI                                      */
+/*******************************************************************************/
+
+void Enemy::think()
+{
+	static Enemy_Behaviours priorbehaviour;
+	
+	//look around for player and player bullets (collect "sensory data")
+	SeePlayer = LookForPlayer();		
+	ThreatenedByBullet = LookForPlayerBullets();
+	
+	//make immediate behaviour transitions in response to "sensory data"
+	static float PROB_AGRRESSIVE = 0.85;	
+	
+	priorbehaviour = behaviour;	
+	switch (behaviour) {
+		
+		case ENEMY_SEARCHING: 
+
+			if (SeePlayer) behaviour = ENEMY_ATTACKING;
+			if (ThreatenedByBullet || lastknown_playerdistance<DANGEROUSPLAYERPROXITY) 
+				behaviour = ENEMY_DEFENDING;	
+			break;
+			
+		case ENEMY_ATTACKING:
+			
+			if (!SeePlayer) behaviour = ENEMY_SEARCHING;
+			if (ThreatenedByBullet || lastknown_playerdistance<DANGEROUSPLAYERPROXITY) 
+				behaviour = ENEMY_DEFENDING;				
+			break;
+			
+		case ENEMY_DEFENDING:
+			
+			if ( !(ThreatenedByBullet || lastknown_playerdistance<DANGEROUSPLAYERPROXITY) )
+			{				
+				if (!SeePlayer) 
+				{
+					behaviour = ENEMY_SEARCHING;					
+				}
+				else {
+				
+					bool aggressive = (ran2(&seed)<PROB_AGRRESSIVE);
+					if (aggressive) 
+					{
+						behaviour = ENEMY_ATTACKING;
+					}
+					else 
+					{
+						Player *player = Game::getPlayer();
+						if (player->firedTimer.time()>ENEMY_SAFETIME) 
+						{
+							behaviour = ENEMY_ATTACKING;
+						}
+					}
+					
+				}
+				
+			}
+
+			break;
+		
+		case ENEMY_WAITING:
+			//do nothing
+			break;
+		
+	}
+
+		
+	/* based on current behaviour state, make decisions (change velocity, fire, etc). 
+	   Whilst in a particular behaviour state, decisions can be made once every 
+	   ENEMY_DECISION_TIME seconds, but a behaviour transition can occur any time, at which
+	   point a new decision can be made immediately. This delay between decisions while in a
+	   particular behaviour state is introduced because otherwise the enemy motion seems too much like a 
+	   random walk */
+
+	if (priorbehaviour==behaviour) {		
+		if (decisionTimer.time()<ENEMY_DECISION_TIME) 
+		{	
+			thinkTimer.start();
+			return;		
+		}
+	}
+	
+	decisionTimer.start();		
+	
+	switch (behaviour) {
+		
+		case ENEMY_SEARCHING: 
+			search();	
+			break;
+			
+		case ENEMY_ATTACKING:
+			attack();
+			break;
+			
+		case ENEMY_DEFENDING:
+			defend();
+			break;
+			
+		case ENEMY_WAITING:
+			//do nothing
+			break;
+			
+	}
+	thinkTimer.start();
+
+}
+
+
+/*******************************************************************************/
+/*                            search behaviour                                 */
+/*******************************************************************************/
+
+void Enemy::search()
+{
+	
+#ifdef ENEMY_DEBUG_OUTPUT
+	printf("ENEMY_SEARCHING\n");
+#endif //ENEMY_DEBUG
+	
+	static float PROB_CHANGEDIRECTIONWHILESEARCHING = 0.2;
+	
+	//decide whether to change direction of search
+	bool changedir = (ran2(&seed)<PROB_CHANGEDIRECTIONWHILESEARCHING);
+					
+	//if I'm stuck next to a cylinder, work out a new velocity vector
+	//to move away from cylinder (currently just directly away from it)
+	if (stucknexttocylinder && cylinder_nexto) 
+		unstickFromCylinder();						
+	else 
+	{
+		if (changedir) 
+		{
+			//I'm searching, I'm not next to a cylinder, I currently don't
+			//know where player is, and I want to move in a new direction, 
+			//so let's choose a completely random direction and continue searching
+			double phi = acos(2.0*ran2(&seed)-1.0);
+			velocity[0] = speed*(float)cos(phi);
+			velocity[1] = speed*(float)sin(phi);												
+		}
+	}
+
+}
+
+/*******************************************************************************/
+/*                            attack behaviour                                 */
+/*******************************************************************************/
+
+void Enemy::attack()
+{		
+	static float PROB_MOVEWHILEATTACKING = 0.75;
+	static float PROB_MOVETOWARDSPLAYERWHILEATTACKING = 0.6;
+	static float PROB_FIREWHENIGETTHECHANCE = 0.83;
+	
+	
+#ifdef ENEMY_DEBUG_OUTPUT
+	printf("ENEMY_ATTACKING\n");
+#endif //ENEMY_DEBUG
+	
+	//decide whether to move or not
+	bool movenow = (ran2(&seed)<PROB_MOVEWHILEATTACKING);
+			
+	if (movenow) 
+	{
+		//if I am stuck next a cylinder, work out a new velocity vector
+		//to move away from cylinder (currently just directly away from it)
+		if (stucknexttocylinder && cylinder_nexto)
+			unstickFromCylinder();
+		
+		else 
+		{
+			/* I'm attacking, I'm not next to a cylinder, I currently can see
+			the player, and I want to move somewhere. I will either:						
+			
+			a) move towards player and continue attacking, unless distance of 
+               approach is less than MIN_ENEMYPLAYER_APPROACH in which case, stop moving. 
+
+            b) move in a random direction to mix things up a bit. */
+			
+			bool attackA = (ran2(&seed)<PROB_MOVETOWARDSPLAYERWHILEATTACKING);
+			
+			// a)
+			if (attackA) 
+			{
+				if (lastknown_playerdistance>MIN_ENEMYPLAYER_APPROACH) 
+				{
+					velocity[0] = speed*view_dir[0];
+					velocity[1] = speed*view_dir[1];												
+				}
+				else 
+				{
+					velocity[0] = 0.0;
+					velocity[1] = 0.0;
+				}
+			}
+			// b)
+			else 
+			{
+				double phi = acos(2.0*ran2(&seed)-1.0);
+				velocity[0] = speed*(float)cos(phi);
+				velocity[1] = speed*(float)sin(phi);
+			}
+				
+		}
+			
+	}
+	else 
+	{
+		//stay in one place while attacking
+		for (int a=0;a<2;a++)
+			velocity[a] = 0.0;
+	}
+		
+	//now that I decided how I want to move, let's start shooting the player
+	//TO DO: allow enemy to fire continously between thinks
+	
+	//firing ought to be somewhat stochastic
+	bool firenow = (ran2(&seed)<PROB_FIREWHENIGETTHECHANCE);	
+	if (firenow) fire();
+		
+}
+				
+/*******************************************************************************/
+/*                            defend behaviour                                 */
+/*******************************************************************************/
+
+void Enemy::defend()
+{
+	
+	static float PROB_HIDEBEHINDCYLINDER = 0.8;
+	bool hide = (ran2(&seed)<PROB_HIDEBEHINDCYLINDER);
+
+#ifdef ENEMY_DEBUG_OUTPUT
+	printf("ENEMY_DEFENDING\n");		
+#endif //ENEMY_DEBUG
+	
+	//if I'm stuck next to a cylinder, work out a new velocity vector
+	//to move away from cylinder (currently just directly away from it)
+	if (stucknexttocylinder && cylinder_nexto) {						
+		unstickFromCylinder();						
+	}
+	else {		
+		
+		//hide behind the nearest cylinder
+		if (hide) {
+			
+			//find nearest cylinder
+			World *theWorld = Game::getWorld();		
+			int mirror_a, mirror_b;
+			Cylinder *nearCyl = theWorld->GetNearestCylinder(position,&mirror_a,&mirror_b);			
+			float *cylpos = nearCyl->GetPosition();
+			float cylrad = nearCyl->getRadius();
+			
+			float mirrorpos[2];
+			float tes = theWorld->terrain->getTerrainEdgeSize();	
+			mirrorpos[0] = cylpos[0] + ((float)mirror_a-1.0)*tes;
+			mirrorpos[1] = cylpos[1] + ((float)mirror_b-1.0)*tes;
+			
+			//point on ray through target cylinder from last seen player position
+			float hideray[2], hidepoint[2], newdir[2];
+			for (int a=0;a<2;a++)
+				hideray[a] = mirrorpos[a]-lastknown_playerpos[a];
+			
+			float cyldist = magnitude2d(hideray);
+			if (cyldist!=0.0) 
+			{
+				hideray[0] /= cyldist;
+				hideray[1] /= cyldist;
+			}
+			for (int a=0;a<2;a++) 
+			{
+				hidepoint[a] = lastknown_playerpos[a] + (cyldist+cylrad+1.5*radius)*hideray[a];
+				newdir[a] = hidepoint[a] - position[a];
+			}
+			
+			float newdist = magnitude2d(newdir);
+			if (newdist!=0.0) 
+			{
+				newdir[0] /= newdist;
+				newdir[1] /= newdist;
+			}
+			
+			if (scalarprod2d(newdir,view_dir)>0.0) {
+				
+#ifdef ENEMY_DEBUG_OUTPUT
+					printf("ENEMY HIDING\n");		
+#endif //ENEMY_DEBUG
+				
+				velocity[0] = speed*newdir[0];
+				velocity[1] = speed*newdir[1];	
+				
+			}
+			else 
+			{
+				
+#ifdef ENEMY_DEBUG_OUTPUT
+				printf("ENEMY WANTED TO HIDE BUT ENDED UP EVADING\n");		
+#endif //ENEMY_DEBUG
+				
+				bool left = (ran2(&seed)<0.5);
+				float sign = left ? -1.0 : 1.0;					
+				
+				//Player *thePlayer = Game::getPlayer();	
+				normcrossprod(zaxis,view_dir,velocity);
+				velocity[0] *= sign*speed;
+				velocity[1] *= sign*speed;
+				
+			}
+			
+		} //if (hide)
+		
+		//alternatively, take direct evasive action
+		else 
+		{
+			
+#ifdef ENEMY_DEBUG_OUTPUT
+			printf("ENEMY EVADING\n");		
+#endif //ENEMY_DEBUG
+			
+			bool left = (ran2(&seed)<0.5);
+			float sign = left ? -1.0 : 1.0;					
+			
+			//Player *thePlayer = Game::getPlayer();	
+			normcrossprod(zaxis,view_dir,velocity);
+			velocity[0] *= sign*speed;
+			velocity[1] *= sign*speed;
+			
+		}
+		
+	}
+	
+}
+
+
+
+

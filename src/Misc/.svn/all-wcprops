@@ -1,0 +1,95 @@
+K 25
+svn:wc:ra_dav:version-url
+V 46
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc
+END
+FileUtils.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/FileUtils.cpp
+END
+geometry.h
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/geometry.h
+END
+Controls.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/svn/EncounterX/!svn/ver/6/EncounterX/src/MIsc/Controls.cpp
+END
+FileUtils.h
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/FileUtils.h
+END
+Font.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/Font.cpp
+END
+Controls.h
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/Controls.h
+END
+Filenames.h
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/svn/EncounterX/!svn/ver/6/EncounterX/src/MIsc/Filenames.h
+END
+memory.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/memory.cpp
+END
+Font.h
+K 25
+svn:wc:ra_dav:version-url
+V 53
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/Font.h
+END
+memory.h
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/memory.h
+END
+Timer.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/Timer.cpp
+END
+TextureLibrary.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/TextureLibrary.cpp
+END
+Timer.h
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/Timer.h
+END
+TextureLibrary.h
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/TextureLibrary.h
+END
+geometry.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/svn/EncounterX/!svn/ver/4/EncounterX/src/MIsc/geometry.cpp
+END

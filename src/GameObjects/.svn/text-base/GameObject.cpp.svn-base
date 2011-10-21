@@ -1,0 +1,20 @@
+
+#include "GameObject.h"
+
+//constructor
+GameObject::GameObject()
+{
+}
+
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+bool GameObject::visible(float *mv, float *vp, float L)
+{
+		float sqrdist = 0.0;
+		for(int a=0;a<2;a++) {
+			sqrdist += SQR(mv[a]-vp[a]); 
+		}
+		return (sqrdist < SQR(L));
+}

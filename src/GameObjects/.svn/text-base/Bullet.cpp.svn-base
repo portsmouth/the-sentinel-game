@@ -1,0 +1,584 @@
+
+
+#include "Game.h"
+#include "geometry.h"
+#include "Bullet.h"
+
+float ran2(long *idum);
+
+inline float SQR(float x) 
+{
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+
+Bullet::Bullet(int Bullet_type, string inTextureName) 
+{
+	fire_timer.start();
+	
+	bullet_type = (Bullet_types)Bullet_type;
+	switch (bullet_type) 
+	{
+		case ENEMY_BULLET:
+	
+			radius = 8.0e-3;
+			height = radius;
+			fire_distance = 2.3*radius;		
+			initial_speed = 0.2;    //in world coord units/second	
+			accel = 0.6;            //in world coord units/second^2
+			max_speed = 0.5;
+			Nbeam = 3; 			    //number of points in bullet trail history
+			nStack = 3; 			//number of close billboards drawn between each trail point
+			break;
+			
+		case PLAYER_BULLET:
+			
+			radius = 8.0e-3;
+			height = radius; //player->GetHoverHeight();
+			fire_distance = 2.3*radius;		
+			initial_speed = 0.2;   //in world coord units/second	
+			accel = 0.6;           //in world coord units/second^2
+			max_speed = 0.5;
+			Nbeam = 6; 			    //number of points in bullet trail history
+			nStack = 3; 			//number of close billboards drawn between each trail point
+			break;									
+	}
+	
+	float mEmission[4] = {0.0,0.0,0.0,1.0};
+	for (int a=0;a<4;a++)
+		no_emission[a] = mEmission[a];
+	
+	//texture
+	TextureLibrary *texturelibrary = Game::getTextureLibrary();
+	string texturepath = FileUtils::GetApplicationResourcesFolderPath() + inTextureName;
+	mTexture = texturelibrary->GetTexture(texturepath, NO_MIPMAPS);
+	
+	dt_stack = UINT / (float)nStack;
+
+	for (int n=0;n<9;n++)
+		trail_pos[n] = matrix(0,Nbeam-1,0,2);
+	deg_to_rad = M_PI/180.0;
+	rad_to_deg = 180.0/M_PI;
+	 
+	//define billboard vertices
+	//TO DO: this is kinda complicated for setting 8 numbers...
+	float bbox_edge = 2.5*radius;
+	for (int corn = 0; corn < 4; ++corn)
+	{
+		for (int i = 0; i < 2; ++i)		
+			billb_vertex[corn][i] = bbox_edge * ( -0.5 + ((corn >> i) & 1) );		
+		billb_vertex[corn][2] = 0.0;
+	}
+	float tmp;
+	for (int i = 0; i < 2; ++i)		
+	{
+		tmp = billb_vertex[2][i];
+		billb_vertex[2][i] = billb_vertex[3][i];
+		billb_vertex[3][i] = tmp;
+	}
+	
+	double bb_texcs[4][2] =
+	{ {0.0,0.0}, {1.0,0.0}, {1.0,1.0}, {0.0,1.0} };
+	
+	for (int corn = 0; corn < 4; ++corn)
+		for (int i = 0; i < 2; ++i)		
+			billb_texcs[corn][i] = bb_texcs[corn][i];
+	
+}
+
+Bullet::~Bullet() //destructor
+{
+	for (int n=0;n<9;n++)
+		free_matrix(trail_pos[n],0,Nbeam,0,2);
+}
+
+
+float Bullet::getAge()
+{
+	return fire_timer.time();
+}
+
+void Bullet::pauseTimer()
+{
+	fire_timer.pause();
+}
+void Bullet::unpauseTimer()
+{
+	fire_timer.unpause();
+}
+
+/* s = [0,1] */
+inline float Bullet::beamshape(float s)
+{
+	float r;	
+	static float MINRAD = 0.6;
+	static float MAXRAD = 1.0;
+	
+	r = 4.0*s*(1.0-s);	
+	r = MINRAD + (MAXRAD-MINRAD)*r;
+	return r;
+}
+
+inline float Bullet::beamalpha(float s)
+{
+	float r;	
+	
+	r = 4.0*s*(1.0-s);	
+	return r;
+}
+
+inline void Bullet::billboardSphericalBegin(float camX, float camY, float camZ,
+											float relobjPosX, float relobjPosY, float relobjPosZ) 
+{
+	
+	float objPosX, objPosY, objPosZ;
+	float lookAt[3], objToCamProj[3], objToCam[3], upAux[3];
+	float angleCosine;
+	
+	objPosX = camX + relobjPosX;
+	objPosY = camY + relobjPosY;
+	objPosZ = camZ + relobjPosZ;
+	
+	glPushMatrix();
+	
+	glTranslatef(objPosX, objPosY, objPosZ);	
+	
+	// objToCamProj is the vector in world coordinates from the 
+	// local origin to the camera projected in the XZ plane
+	objToCamProj[0] = -relobjPosX ;
+	objToCamProj[1] = 0;
+	objToCamProj[2] = -relobjPosZ ;
+	
+	// This is the original lookAt vector for the object 
+	// in world coordinates
+	lookAt[0] = 0;
+	lookAt[1] = 0;
+	lookAt[2] = 1;
+	
+	// normalize both vectors to get the cosine directly afterwards
+	normalize(objToCamProj);
+	
+	// easy fix to determine wether the angle is negative or positive
+	// for positive angles upAux will be a vector pointing in the 
+	// positive y direction, otherwise upAux will point downwards
+	// effectively reversing the rotation.
+	crossprod(lookAt,objToCamProj,upAux);
+	
+	// compute the angle
+	angleCosine = scalarprod(lookAt,objToCamProj);
+	
+	// perform the rotation. The if statement is used for stability reasons
+	// if the lookAt and objToCamProj vectors are too close together then 
+	// |angleCosine| could be bigger than 1 due to lack of precision
+	if ((angleCosine < 0.99990) && (angleCosine > -0.9999))
+		glRotatef(acos(angleCosine)*rad_to_deg, upAux[0], upAux[1], upAux[2]);	
+	
+	// so far it is just like the cylindrical billboard. The code for the 
+	// second rotation comes now
+	// The second part tilts the object so that it faces the camera
+	
+	// objToCam is the vector in world coordinates from 
+	// the local origin to the camera
+	objToCam[0] = camX - objPosX;
+	objToCam[1] = camY - objPosY;
+	objToCam[2] = camZ - objPosZ;
+	
+	// Normalize to get the cosine afterwards
+	normalize(objToCam);
+	
+	// Compute the angle between objToCamProj and objToCam, 
+	//i.e. compute the required angle for the lookup vector
+	angleCosine = scalarprod(objToCamProj,objToCam);
+	
+	// Tilt the object. The test is done to prevent instability 
+	// when objToCam and objToCamProj have a very small
+	// angle between them
+	if ((angleCosine < 0.99990) && (angleCosine > -0.9999))
+		if (objToCam[1] < 0)
+			glRotatef(acos(angleCosine)*rad_to_deg,1,0,0);	
+		else
+			glRotatef(acos(angleCosine)*rad_to_deg,-1,0,0);	
+	
+}
+
+void Bullet::draw(void)
+{	
+	if (beam_length<2) return;
+	
+	Player *pPlayer = Game::getPlayer();
+	float *view_point = pPlayer->GetViewPoint();
+			
+	glDisable(GL_LIGHTING);	
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(GL_FALSE);
+	
+	glShadeModel(GL_SMOOTH);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE);
+	//glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+
+	glEnable(GL_TEXTURE_2D);
+	glTexEnvf(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
+	mTexture->Apply();
+	
+	//draw trail
+	int beam_end = beam_start + beam_length;
+	int m;
+	
+	World *theWorld = Game::getWorld();				
+	//float tes = theWorld->terrain->getTerrainEdgeSize();
+			
+	float stackpos[3], trailpoint[3];
+
+	// s=[0,1] along beam from start to end
+	float s, brad, balp;
+	float ds_point = 1.0 / float(beam_length-1);
+	float ds_stack = ds_point / float(nStack); //TO DO: pre-compute
+		
+	for (int mir=0;mir<9;mir++) 
+	{
+		//if (visible(mirror[mir],view_point,tes)) 
+		s = -ds_stack;							
+				
+		for (int n=beam_end-1; n>beam_start; n--) 
+		{			
+			m = n % Nbeam;
+			
+			for (int a=0;a<3;a++)
+				trailpoint[a] = trail_pos[mir][m][a];
+			
+			for (int ns=0;ns<nStack;ns++)
+			{
+				for (int a=0;a<2;a++)
+					stackpos[a] = trailpoint[a] - dt_stack*velocity[a]*(float)ns;
+				stackpos[2] = height + theWorld->terrain->height(stackpos[0],stackpos[1]);
+				
+				billboardSphericalBegin(view_point[0], view_point[1], view_point[2],
+										stackpos[0]-view_point[0], 
+										stackpos[1]-view_point[1], 
+										stackpos[2]-view_point[2]);
+			
+				s += ds_stack;							
+				brad = beamshape(s);
+				balp = beamalpha(s);
+				glColor4f(1.0,1.0,1.0,balp);
+				
+				glBegin(GL_QUADS);
+				for (int a=0;a<4;a++) 
+				{
+					glTexCoord2f(billb_texcs[a][0],
+								 billb_texcs[a][1]);
+					glVertex3f(brad*billb_vertex[a][0],
+							   brad*billb_vertex[a][1],
+							   brad*billb_vertex[a][2]);
+				}
+				glEnd();
+				billboardEnd();
+
+			}
+		}
+	}
+
+    glDisable(GL_BLEND); 
+    glDepthMask(GL_TRUE);
+	
+    glColor4f(1.0,1.0,1.0,1.0);
+}
+
+void Bullet::WrapDomain(float *original, float *wrapped, float tes)
+{		
+	int n;	
+	for (int a=0;a<2;a++) 
+	{	
+		wrapped[a] = original[a];
+		if (original[a]>tes) 
+		{			
+			n = int(original[a]/tes);
+			wrapped[a] -= tes*(float)n;			
+		}
+		else if (original[a]<0.0) 
+		{
+			n = 1+abs(int(original[a]/tes));
+			wrapped[a] += tes*(float)n;
+		}		
+	}
+}
+
+
+
+bool Bullet::Fire(float *origin, float *fVelocity, float *direction)
+{
+	World *theWorld = Game::getWorld();	
+	float tes = theWorld->terrain->getTerrainEdgeSize();		
+
+	beam_start = 0;
+	beam_length = 1;
+
+	for (int a=0;a<2;a++) 
+		position[a] = origin[a] + fire_distance*direction[a];
+	position[2] = height + theWorld->terrain->height(position[0],position[1]);
+	
+	//wrap to central domain
+	WrapDomain(position,position,tes);
+	
+	//set mirror positions
+	float tx, ty;
+	for (int a=0;a<3;a++) 
+	{
+		tx = position[0] + ((float)a-1.0)*tes;
+		for (int b=0;b<3;b++) 
+		{	
+			ty = position[1] + ((float)b-1.0)*tes;
+			trail_pos[a+3*b][beam_start][0] = tx;
+			trail_pos[a+3*b][beam_start][1] = ty;
+			trail_pos[a+3*b][beam_start][2] = position[2];
+			mirror[a+3*b][0] = tx;
+			mirror[a+3*b][1] = ty;	
+			mirror[a+3*b][2] = position[2];
+		}				
+	}
+	
+	//see if there is a cylinder collision at the position where the 
+	//bullet is created. If so, we don't allow the player/enemy to fire a bullet here.
+	Cylinder* pCyl = theWorld->TestCollision_BulletCylinder(position,radius);
+	if (pCyl) return false;
+	
+	//fVelocity is the velocity of the object emitting the bullet
+	//At the moment, enemy bullet initial velocity is added to enemy speed, amd
+	//player bullet velocity is independent of player motion.
+	
+	switch (bullet_type) 
+	{
+		case ENEMY_BULLET:
+			for (int a=0;a<3;a++) 
+				velocity[a] = initial_speed*direction[a] + fVelocity[a];
+			break;
+	
+		case PLAYER_BULLET:
+			for (int a=0;a<3;a++) 
+				velocity[a] = initial_speed*direction[a];
+			break;
+	}
+	
+	speed = magnitude2d(velocity);
+		
+	return true;	
+}
+
+bool Bullet::move()
+{		
+	World *theWorld = Game::getWorld();		
+					
+	float candidate_point[2];
+	for (int a=0;a<2;a++) 
+		candidate_point[a] = position[a] + UINT*velocity[a];
+
+	//check for cylinder collisions
+	Cylinder *pCyl;
+	pCyl = AttemptToMove(candidate_point);
+		
+	//if there is a collision with a cylinder, move bullet to point where it touches cylinder,
+	//and set velocity to the velocity after an elastic bounce
+	bool error_detect = false;
+	if (pCyl!=NULL) 
+	{	
+		
+		//A collision occurred with cylinder pointed to by pCyl.				
+		//find position of the cylinder
+		float *cylpos = pCyl->position;
+				
+		//given current position of bullet and cylinder, and bullet velocity
+		//find velocity of reflected bullet
+
+		float A,B,L;	
+		//compute A
+		float *vnorm = new float[2];
+		memcpy(vnorm,velocity,2*sizeof(float));
+		normalize2d(vnorm);				
+		float cyldist[2];
+		for (int a=0;a<2;a++) 
+			cyldist[a] = cylpos[a] - position[a];
+		A = scalarprod2d(vnorm,cyldist);
+		
+		//compute B;
+		float cyldist_sqrmag = scalarprod2d(cyldist,cyldist);		
+		float cylinder_radius = pCyl->getRadius();
+		B = cyldist_sqrmag - SQR(cylinder_radius + radius);
+			
+		if (B<0.0) 
+		{
+			//whoops! current bullet position is inside cylinder
+			printf("error: failed to detect bullet-cylinder collision\n");
+			error_detect = true;
+		}
+		
+		//compute L
+		double discr = (double)(SQR(A) - SQR(B));
+		
+		if (discr<0.0) 
+		{
+			//bullet misses cylinder - should not occur since at candidate position 
+			//bullet was found to collide with cylinder.
+			printf("error: spurious bullet-cylinder collision\n");
+			error_detect = true;
+		}
+		else 
+			L = A - (float)sqrt(discr);
+		
+		if(!error_detect) 
+		{			
+			//move bullet to touch boundary of cylinder
+			for (int a=0;a<2;a++) 
+				position[a] += L*vnorm[a];
+
+			//construct vector passing through the touching bullet and cylinder centers
+			float reflect[2];
+			for (int a=0;a<2;a++) 
+				reflect[a] = position[a] - cylpos[a];
+			
+			normalize2d(reflect);			
+			//set reflected bullet velocity
+			float vpara[2], vperp[2];
+			float vpara_mag = scalarprod2d(velocity,reflect);
+			for (int a=0;a<2;a++) {
+				vpara[a] = vpara_mag*reflect[a];
+				vperp[a] = velocity[a] - vpara[a];
+			}
+			for (int a=0;a<2;a++) 
+				velocity[a] = vperp[a] - vpara[a];
+			
+			//play a sound indicating bullet reflected off cylinder
+			Sound *soundplayer = Game::getSound();
+			float soundvolume = soundplayer->ComputeSoundVolume(position);
+			soundvolume *= magnitude2d(velocity)/max_speed; //so sound volume scales with bullet speed
+			soundplayer->PlayGeneralSound(PlayerFire,soundvolume);
+									
+		}
+		
+		delete [] vnorm;
+	}
+	
+	if(error_detect) 
+	{			
+		//if there was an error while detecting collision, just move bullet forward,
+		//thus avoiding disaster
+		for (int a=0;a<2;a++) 
+			position[a] = candidate_point[a];
+	}
+	
+	//update velocity vector due to acceleration
+	else 
+	{
+		float dv = UINT*accel;
+
+		float oldspeed = magnitude2d(velocity);
+		speed = oldspeed+dv;
+		if (speed>max_speed) speed = max_speed;			
+		
+		if (oldspeed!=0.0) 				
+			for (int a=0;a<2;a++) 
+				velocity[a] *= speed/oldspeed;
+	}
+	
+	position[2] = height + theWorld->terrain->height(position[0],position[1]);
+
+	//wrap position into central domain
+	float tes = theWorld->terrain->getTerrainEdgeSize();		
+	WrapDomain(position,position,tes);
+		
+	//record bullet position in beam trail
+	beam_start++;
+	if (beam_start==Nbeam) beam_start=0;
+	beam_length++;
+	if (beam_length>Nbeam) beam_length=Nbeam;
+	
+	//set mirror positions
+	float tx, ty;
+	for (int a=0;a<3;a++) 
+	{
+		tx = position[0] + ((float)a-1.0)*tes;
+		for (int b=0;b<3;b++) 
+		{	
+			ty = position[1] + ((float)b-1.0)*tes;
+			trail_pos[a+3*b][beam_start][0] = tx;
+			trail_pos[a+3*b][beam_start][1] = ty;
+			trail_pos[a+3*b][beam_start][2] = position[2];
+			mirror[a+3*b][0] = tx;
+			mirror[a+3*b][1] = ty;	
+			mirror[a+3*b][2] = position[2];
+		}				
+	}
+		
+	switch (bullet_type) 
+	{
+		
+		case PLAYER_BULLET:
+			
+			//if the enemy is active, check for enemy collisions
+			if (theWorld->enemy.GetState() == (Enemy_States)ENEMY_ALIVE) 												
+				return theWorld->enemy.TestCollisionBullet(position,radius);
+
+			else return false;
+			break;
+			
+		case ENEMY_BULLET:
+			
+			//check for collision with player
+			Player *thePlayer = Game::getPlayer();				
+			return thePlayer->TestCollisionBullet(position,radius);
+			break;
+			
+	}
+	return false;		
+}
+
+Cylinder* Bullet::AttemptToMove(float *candidate_point)
+{
+	World *theWorld = Game::getWorld();				
+	
+	//see if there is a collision at candidate position or not
+	Cylinder* pCyl = theWorld->TestCollision_BulletCylinder(candidate_point,radius);
+	
+	if (pCyl==NULL) 
+		//if not, just move bullet to candidate position
+		for (int a=0;a<2;a++) 
+			position[a] = candidate_point[a];
+			
+	return pCyl;
+}
+
+/* determine if the bullet has a trajectory which will lead it
+   to collide with the enemy. This is to provide a "hint" to the enemy
+   to get out of the way of the threat */
+bool Bullet::bulletThreatensEnemy()
+{
+	World *theWorld = Game::getWorld();				
+	float *enemypos = theWorld->enemy.position;
+	float enemyrad = theWorld->enemy.radius;
+	
+	//check rays from all bullet mirrors
+	float ray[2];
+	for (int a=0;a<3;a++) 
+		for (int b=0;b<3;b++) 
+		{			
+			ray[0] = enemypos[0]-mirror[a+3*b][0];
+			ray[1] = enemypos[1]-mirror[a+3*b][1];			
+			float sqrenemydist = sqrmagnitude2d(ray);
+						
+			float velocity2d[2] = {velocity[0],velocity[1]};			
+			float vsqrmag = sqrmagnitude2d(velocity2d);
+
+			float denom = (sqrenemydist*vsqrmag);
+			float sp;
+			if (denom!=0.0) 
+				sp = SQR(scalarprod2d(ray,velocity2d))/denom;			
+			else return false;
+			
+			if ( sp > sqrenemydist/(sqrenemydist+SQR(enemyrad+radius)) )
+				return true;
+		}
+	
+	return false;
+}
+
+

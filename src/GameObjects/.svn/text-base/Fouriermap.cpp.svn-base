@@ -1,0 +1,234 @@
+#include "math.h"
+#include "memory.h"
+#include "Fouriermap.h"
+
+void fourn(float data[], unsigned long nn[], int ndim, int isign);
+float gasdev(long *idum);
+float ran2(long *idum);
+
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+	
+Fouriermap::Fouriermap(long mSeed, int mN, float mL,
+					   float mAmp, float mNp, int mKtrunc) :
+
+seed(mSeed),
+Ngrid(mN),
+L(mL),          //edge length of map in real space (world coords)
+Amp(mAmp),      //power spec amplitude
+np(mNp),        //power spec index
+ktrunc(mKtrunc) //maximum wavevector
+
+{	
+	/* The height field is stored in a 2d array H[Ngrid][Ngrid]. */
+	H = matrix(0,Ngrid,0,Ngrid);
+			
+	/* Shape of the height field is determined by the Fourier power spectrum P(k),
+	   which I take to be a power law, Amp*k^np. */
+	Power = new float[ktrunc];		
+	Amp *= L;
+	np = -1.0;
+	Power[0] = 0.0;		
+	for (int k=1;k<ktrunc;k++) //k is wavevector magnitude index in units of (2*pi/L).
+		Power[k] = Amp*pow(k,np);
+
+	//generate the heightfield
+	make_FTheightmap();
+	
+}
+
+Fouriermap::~Fouriermap() //destructor
+{
+	delete [] Power;
+	free_matrix(H,0,Ngrid,0,Ngrid);
+}
+
+
+float Fouriermap::getAmp(int k)
+{
+	float amp;
+	if (k>=ktrunc)
+		amp = 0.0;
+	else 
+		amp = Amp*sqrt((double)Power[k])*gasdev(&seed);
+	return amp;
+}
+
+void Fouriermap::makeFT(int i, int j, int k)
+{	
+	float amp = getAmp(k);	
+	float phi = (float)2.0*M_PI*ran2(&seed);
+	Hreal[i][j] = amp*cos((double)phi);
+	Himag[i][j] = amp*sin((double)phi);
+	Hreal[Ngrid-i+2][Ngrid-j+2] = Hreal[i][j];
+	Himag[Ngrid-i+2][Ngrid-j+2] = -Himag[i][j];
+}
+
+/* generate a periodic 2d height map with Fourier method.
+   N must be a power of two. */
+void Fouriermap::make_FTheightmap() 
+{	
+	/* Now for each k sample a Gaussian distributed random number
+	   with 0 mean and variance P[k]. Construct 2-d Fourier transform of H, 
+	   in a square of side Ngrid. Ensure reality of inverse transform by 
+	   enforcing symmetry relations */			
+	Hreal = matrix(0,Ngrid,0,Ngrid);
+	Himag = matrix(0,Ngrid,0,Ngrid);
+	
+	/* bulk of wave-number space */
+	int i,j,k;
+
+	for (i=2;i<=Ngrid/2;i++)
+		for (j=2;j<=Ngrid/2;j++) 
+		{			
+			k = (int)floor(sqrt((double)SQR((double)i-1)+SQR((double)j-1)));			
+			makeFT(i,j,k);						
+		}
+	
+	for (i=Ngrid/2+2;i<=Ngrid;i++) 
+		for (j=2;j<=Ngrid/2;j++) 
+		{
+			k = (int)floor(sqrt((double)SQR((double)Ngrid-i+1)+SQR((double)j-1)));
+			makeFT(i,j,k);						
+		}
+	
+	/* values which lie on periodic boundary */	
+	for (j=2;j<=Ngrid/2;j++) 
+	{
+		k = (int)floor(sqrt((double)SQR((double)Ngrid/2)+SQR((double)j-1)));
+		makeFT(Ngrid/2+1,j,k);						
+	}
+	for (i=2;i<=Ngrid/2;i++) 
+	{
+		k = (int)floor(sqrt((double)SQR((double)i-1)+SQR((double)Ngrid/2)));
+		makeFT(i,Ngrid/2+1,k);							
+	}
+	
+	/* zero frequency (nx=0, or ny=0, not both) modes */
+	float phi, amp;
+	
+	for (i=2;i<=Ngrid/2;i++) 
+	{
+		k = (int)floor((double)i-1);
+		amp = getAmp(k);
+		phi = 2.0*M_PI*ran2(&seed);
+		Hreal[i][1] = amp*cos((double)phi); 
+		Himag[i][1] = amp*sin((double)phi); 
+		Hreal[Ngrid-i+2][1] = Hreal[i][1];
+		Himag[Ngrid-i+2][1] = -Himag[i][1]; 
+	}
+	for (j=2;j<=Ngrid/2;j++) 
+	{
+		k = (int)floor((double)j-1);
+		amp = getAmp(k);
+		phi = 2.0*M_PI*ran2(&seed);
+		Hreal[1][j] = amp*cos((double)phi); 
+		Himag[1][j] = amp*sin((double)phi); 
+		Hreal[1][Ngrid-j+2] = Hreal[1][j];
+		Himag[1][Ngrid-j+2] = -Himag[1][j]; 
+	}
+	
+	/* zero frequency mode (0,0) and boundary modes
+		(N/2,N/2), (N/2,0), (0,N/2) must all have zero imag part */
+	Hreal[1][1] = 0.0;
+	Himag[1][1] = 0.0;
+	
+	k = (int)floor(sqrt((double)2.0)*Ngrid/2);
+	amp = getAmp(k);
+	phi = 2.0*M_PI*ran2(&seed);
+	Hreal[Ngrid/2+1][Ngrid/2+1] = amp*cos((double)phi); ; 
+	Himag[Ngrid/2+1][Ngrid/2+1] = 0.0;
+		
+	k = (int)floor((double)Ngrid/2);
+	amp = getAmp(k);
+	phi = 2.0*M_PI*ran2(&seed);
+	Hreal[Ngrid/2+1][1] = amp*cos((double)phi); 
+	Himag[Ngrid/2+1][1] = 0.0;
+	
+	k = (int)floor((double)Ngrid/2);
+	amp = getAmp(k);
+	phi = 2.0*M_PI*ran2(&seed);
+	Hreal[1][Ngrid/2+1] = amp*cos((double)phi); 
+	Himag[1][Ngrid/2+1] = 0.0;
+		
+	
+	/* dump FT into a 1-d array for fourn to work on */	
+	float *FTdata = fvector(0,2*Ngrid*Ngrid+1);
+
+	for (i=1;i<=Ngrid;i++) 
+		for (j=1;j<=Ngrid;j++) 
+		{
+			FTdata[2*i-1+2*(j-1)*Ngrid] = Hreal[i][j];		
+			FTdata[2*i+2*(j-1)*Ngrid]   = Himag[i][j];
+		}
+			
+	free_matrix(Hreal,0,Ngrid,0,Ngrid);
+	free_matrix(Himag,0,Ngrid,0,Ngrid);
+	
+	/* Take inverse 2d-Fourier transform with fourn 
+		to recover real space height map */
+				
+	int isign = -1;
+	int ndim = 2;
+	unsigned long nn[2];
+	nn[1]=Ngrid;
+	nn[2]=Ngrid;
+	
+	fourn(FTdata,nn,ndim,isign);
+		
+	for (i=1;i<=Ngrid;i++) 
+		for (j=1;j<=Ngrid;j++) 
+			H[i-1][j-1] = FTdata[2*i-1+2*(j-1)*Ngrid];
+
+	free_fvector(FTdata,0,2*Ngrid*Ngrid+1);
+		
+	/* make sure opposite edges match (numerical roundoff in FT routine
+		seems to lead to close but inadequate matching) */
+	for (i=0;i<Ngrid;i++) 
+	{
+		H[0][i] = H[Ngrid-1][i];
+		H[i][0] = H[i][Ngrid-1];		
+	}
+	/* make sure corners are all equal */
+	H[Ngrid-1][0] = H[0][0];
+	H[0][Ngrid-1] = H[0][0];
+	H[Ngrid-1][Ngrid-1] = H[0][0];
+		
+}
+
+inline void Fouriermap::wrap(float *x, float L)
+{
+	if (*x>L) *x-=L;
+	else if (*x<0.0) *x+=L;
+}
+
+/* make heightmap a continuous function of (x,y) by bi-linear interpolation */
+float Fouriermap::interpolate(float x, float y)
+{
+	float delta = L/(float)(Ngrid-1);
+
+	wrap(&x,L);
+	wrap(&y,L);
+			
+	int i = static_cast<int>(x/delta);
+	if (i<0) i=0;
+	else if (i>=Ngrid) i=Ngrid-2;
+	
+	int j = static_cast<int>(y/delta);
+	if (j<0) j=0;
+	else if (j>=Ngrid) j=Ngrid-2;
+	
+	float h1 = H[i][j];
+	float h2 = H[i+1][j];
+	float h3 = H[i+1][j+1];
+	float h4 = H[i][j+1];
+	
+	float t = (x-i*delta)/delta;
+	float u = (y-j*delta)/delta;
+
+	return (1.0-t)*(1.0-u)*h1+t*(1.0-u)*h2+t*u*h3+(1.0-t)*u*h4;   
+}
+
+
+

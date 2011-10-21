@@ -1,0 +1,481 @@
+
+//#include <OpenGL/glext.h>
+
+#include "Game.h"
+#include "FileUtils.h"
+#include "Filenames.h"
+#include "HUD.h"
+
+#include "stdio.h"
+#include "stdlib.h"
+#include "math.h"
+#include <string>
+#include <iostream>
+
+using std::string;
+using std::cout;
+using std::endl;
+
+HUD::HUD(void) //constructor
+{	
+	//loadTextures();
+
+}
+
+HUD::~HUD() //destructor
+{
+}
+
+void HUD::init()
+{
+	slAlpha[RED_SL  ] = 0.0;  
+	slAlpha[GREEN_SL] = 0.0;  
+	slAlpha[BLUE_SL ] = 0.0;  
+	
+	slState[RED_SL  ] = SL_OFF;
+	slState[GREEN_SL] = SL_OFF;
+	slState[BLUE_SL ] = SL_OFF;
+	
+	slTimer[RED_SL  ].stop();
+	slTimer[GREEN_SL].stop();
+	slTimer[BLUE_SL ].stop();
+}
+
+
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+void HUD::setLight(sl_name sl, sl_state state)
+{
+	if (slState[sl] == state) return;	
+	slState[sl] = state;	
+	slTimer[sl].start();
+}
+
+const float turnon_time  = 0.5;
+const float turnoff_time = 2.0;
+const float flash_period = 0.25;
+const float max_light_alpha = 0.35;
+
+void HUD::display()
+{	
+	/* scanner */
+	glDisable(GL_LIGHTING);
+	glDisable(GL_FOG);
+	glDisable(GL_DEPTH_TEST);	
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+
+	mTexture_scanner->Apply();
+	
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	
+	int dims[2];
+	Game::getSDLview()->getViewDims(dims);	
+	float aspect = (float)dims[0]/dims[1];	
+	float HUD_size = 0.2;
+	float HUD_x, HUD_y;
+	HUD_x = 0.12;
+	HUD_y = 0.0;
+	
+	glBegin(GL_QUADS);		
+	glTexCoord2f(0.0, 1.0);
+	glVertex3f(HUD_x-0.5*HUD_size, HUD_y, 0.0);
+	glTexCoord2f(1.0, 1.0);
+	glVertex3f(HUD_x+0.5*HUD_size, HUD_y, 0.0);
+	glTexCoord2f(1.0, 0.0);
+	glVertex3f(HUD_x+0.5*HUD_size, HUD_y+HUD_size*aspect, 0.0);
+	glTexCoord2f(0.0, 0.0);
+	glVertex3f(HUD_x-0.5*HUD_size, HUD_y+HUD_size*aspect, 0.0);	
+	glEnd();
+					
+	float HUD_y0 = HUD_y+0.5*HUD_size*aspect;
+	
+	/* scanner lights  */
+	float sl_time;
+	
+	
+	enum sl_name sl;
+	for (sl = RED_SL; sl<= BLUE_SL; sl=sl_name(sl+1)) 
+	{
+		switch ( slState[sl] )
+		{
+			case SL_OFF: //turn off, gradually
+				
+				if (slTimer[sl].isStarted() && (sl_time = slTimer[sl].time()) < turnoff_time) 
+					slAlpha[sl] = max_light_alpha*(1.0-sl_time/turnoff_time);
+				else 
+					slAlpha[sl] = 0.0;
+				break;
+								
+			case SL_ON: //turn on, gradually
+				
+				if (slTimer[sl].isStarted() && (sl_time = slTimer[sl].time()) < turnon_time) 
+					slAlpha[sl] = max_light_alpha*sl_time/turnon_time;
+				else 
+					slAlpha[sl] = max_light_alpha;
+				break;
+				
+			case SL_PULSE: //turn on once and then off again, gradually
+				
+				sl_time = slTimer[sl].time();
+				if (slTimer[sl].isStarted() && (sl_time < turnon_time))
+					slAlpha[sl] = max_light_alpha*sl_time/turnon_time;
+				else if (sl_time < turnon_time + turnoff_time)
+					slAlpha[sl] = max_light_alpha * ( 1.0 - (sl_time-turnon_time)/turnoff_time );
+				else 
+				{
+					slAlpha[sl] = 0.0;	
+					setLight(sl,SL_OFF);
+				}
+				break;
+				
+			case SL_FLASHING:
+				break;
+		}
+	}
+		
+	
+	//Top Left border
+	/*
+	mTexture_scannerTL_border->Apply();
+	glBegin(GL_QUADS);		
+	glTexCoord2f(0.0,1.0);
+	glVertex3f(HUD_x-0.5*HUD_size,HUD_y+0.5*HUD_size*aspect,0.0);
+	glTexCoord2f(1.0,1.0);
+	glVertex3f(HUD_x,HUD_y+0.5*HUD_size*aspect,0.0);
+	glTexCoord2f(1.0,0.0);
+	glVertex3f(HUD_x,HUD_y+HUD_size*aspect,0.0);
+	glTexCoord2f(0.0,0.0);
+	glVertex3f(HUD_x-0.5*HUD_size,HUD_y+HUD_size*aspect,0.0);	
+	glEnd();
+	 */
+	
+	//Top Left light (GREEN)
+	glColor4f(1.0,1.0,1.0,slAlpha[GREEN_SL]);	
+
+	mTexture_scannerTL_light->Apply();
+	glBegin(GL_QUADS);		
+	glTexCoord2f(0.0,1.0);
+	glVertex3f(HUD_x-0.5*HUD_size,
+			   HUD_y+0.5*HUD_size*aspect,0.0);
+	glTexCoord2f(1.0,1.0);
+	glVertex3f(HUD_x,
+			   HUD_y+0.5*HUD_size*aspect,0.0);
+	glTexCoord2f(1.0,0.0);
+	glVertex3f(HUD_x,
+			   HUD_y+HUD_size*aspect,0.0);
+	glTexCoord2f(0.0,0.0);
+	glVertex3f(HUD_x-0.5*HUD_size,
+			   HUD_y+HUD_size*aspect,0.0);	
+	glEnd();	
+			
+	//Bottom Left light (RED)
+	glColor4f(1.0,1.0,1.0,slAlpha[RED_SL]);	
+
+	mTexture_scannerBL_light->Apply();
+	glBegin(GL_QUADS);		
+	glTexCoord2f(0.0,1.0);
+	glVertex3f(HUD_x-0.5*HUD_size,
+			   HUD_y,0.0);
+	glTexCoord2f(1.0,1.0);
+	glVertex3f(HUD_x,
+			   HUD_y,0.0);
+	glTexCoord2f(1.0,0.0);
+	glVertex3f(HUD_x,
+			   HUD_y+0.5*HUD_size*aspect,0.0);
+	glTexCoord2f(0.0,0.0);
+	glVertex3f(HUD_x-0.5*HUD_size,
+			   HUD_y+0.5*HUD_size*aspect,0.0);	
+	glEnd();	
+	
+	/* scanner display  */
+	glColor4f(1.0,1.0,1.0,1.0);	
+
+	//find 2d position of enemy relative to player
+	Player *thePlayer = Game::getPlayer();
+	Enemy *theEnemy = &(Game::getWorld()->enemy);
+	
+	if (theEnemy->GetState() == (Enemy_States)ENEMY_ALIVE) 
+	{
+		
+		float *player_pos = thePlayer->GetViewPoint();
+		float *enemy_pos = theEnemy->position;
+		
+		//go through all mirror enemies
+		float tes = Game::getWorld()->terrain->getTerrainEdgeSize();				
+		float mirror[9][2];
+		for (int a=0;a<3;a++) {
+			for (int b=0;b<3;b++) {			
+				mirror[a+3*b][0] = enemy_pos[0] + ((float)a-1.0)*tes;
+				mirror[a+3*b][1] = enemy_pos[1] + ((float)b-1.0)*tes;	
+			}				
+		}
+		
+		float rel_dist;
+		float rel_pos[9][2];		
+		float dot_quad_size_x = HUD_size*0.125;
+		float dot_quad_size_y = aspect*dot_quad_size_x;
+		float dot_quad_x, dot_quad_y;
+		
+		mTexture_scannerdot->Apply();
+		
+		//max enemy distance allowed in order for enemy to be seen on scanner
+		float max_scanner_distance = tes;  
+		
+		for (int a=0;a<3;a++) {
+			for (int b=0;b<3;b++) {	
+				for (int c=0;c<2;c++) {			
+					rel_pos[a+3*b][c] = (mirror[a+3*b][c] - player_pos[c])/max_scanner_distance;		
+				}
+			}
+		}
+		
+		//find anti-clockwise angle phi between view direction and world x-axis
+		float *view_dir = thePlayer->GetViewDirection();
+		float phi = (float)atan2(view_dir[1],view_dir[0]);	
+		
+		//then rotate all the (relative) mirror points clockwise through phi - PI/2
+		//(taking the view direction into the local y-axis)	
+		float mirror_rot = phi - M_PI/2.0;
+		float crot = cos(mirror_rot);
+		float srot = sin(mirror_rot);
+		float rot_matrix[2][2];
+		rot_matrix[0][0] = crot;
+		rot_matrix[0][1] = srot;
+		rot_matrix[1][0] = -srot;
+		rot_matrix[1][1] = crot;
+		
+		int index;
+		float rot_mirror[9][2];
+		for (int a=0;a<3;a++) {
+			for (int b=0;b<3;b++) {
+				index = a+3*b;
+				rot_mirror[index][0] = rot_matrix[0][0]*rel_pos[index][0]
+					+rot_matrix[0][1]*rel_pos[index][1];
+				rot_mirror[index][1] = rot_matrix[1][0]*rel_pos[index][0]
+					+rot_matrix[1][1]*rel_pos[index][1];
+			}		
+		}			
+						
+		float scanner_circle_size = 0.6;
+		for (int a=0;a<3;a++) {
+			for (int b=0;b<3;b++) {	
+				
+				index = a+3*b;
+				rel_dist = sqrmagnitude2d(rot_mirror[index]);
+				if (rel_dist<SQR(scanner_circle_size)) { //plot a scanner dot for this mirror
+					
+					dot_quad_x = 0.5*HUD_size*rot_mirror[index][0];
+					dot_quad_y = 0.5*aspect*HUD_size*rot_mirror[index][1];
+					
+					glBegin(GL_QUADS);		
+					glTexCoord2f(0.0,1.0);
+					glVertex3f(HUD_x + dot_quad_x - 0.5*dot_quad_size_x,
+							   HUD_y0 + dot_quad_y - 0.5*dot_quad_size_y,0.0);
+					glTexCoord2f(1.0,1.0);
+					glVertex3f(HUD_x + dot_quad_x + 0.5*dot_quad_size_x,
+							   HUD_y0 + dot_quad_y - 0.5*dot_quad_size_y,0.0);
+					glTexCoord2f(1.0,0.0);
+					glVertex3f(HUD_x + dot_quad_x + 0.5*dot_quad_size_x,
+							   HUD_y0 + dot_quad_y + 0.5*dot_quad_size_y,0.0);
+					glTexCoord2f(0.0,0.0);
+					glVertex3f(HUD_x + dot_quad_x - 0.5*dot_quad_size_x,
+							   HUD_y0 + dot_quad_y + 0.5*dot_quad_size_y,0.0);	
+					glEnd();
+					
+				}
+				
+			}
+		}
+
+	}
+	
+	/* score and health indicators  */
+		
+	//lives panel	
+	//float lpy_size = lpx_size*aspect;
+	//float lp_x0, lp_y0;
+	//float lp_x1, lp_y1;
+	//lp_x0 = -0.014; lp_x1 = lp_x0 + lpx_size;
+	//lp_y0 = 0.84;   lp_y1 = lp_y0 + lpy_size;
+		
+	/*
+	mTexture_livespanel->Apply();
+	glBegin(GL_QUADS);		
+	glTexCoord2f(0.0,1.0);
+	glVertex3f(lp_x0,lp_y0,0.0);
+	glTexCoord2f(1.0,1.0);
+	glVertex3f(lp_x1,lp_y0,0.0);
+	glTexCoord2f(1.0,0.0);
+	glVertex3f(lp_x1,lp_y1,0.0);
+	glTexCoord2f(0.0,0.0);
+	glVertex3f(lp_x0,lp_y1,0.0);	
+	glEnd();	
+	*/
+	
+		
+	//enemies panel
+	float epx_size = 0.14;
+	float epy_size = epx_size*aspect;
+	float ep_x0, ep_y0;
+	float ep_x1, ep_y1;
+	ep_x0 = 0.87; ep_x1 = ep_x0 + epx_size;
+	ep_y0 = 0.84; ep_y1 = ep_y0 + epy_size;
+	/*
+	glDisable(GL_LIGHTING); 
+	glDisable(GL_DEPTH_TEST);//cos drawing fonts turns them back on, .. maybe that's a bad idea...
+	glEnable(GL_BLEND); 	
+	mTexture_enemypanel->Apply();
+	glBegin(GL_QUADS);		
+	glTexCoord2f(0.0,1.0);
+	glVertex3f(ep_x0,ep_y0,0.0);
+	glTexCoord2f(1.0,1.0);
+	glVertex3f(ep_x1,ep_y0,0.0);
+	glTexCoord2f(1.0,0.0);
+	glVertex3f(ep_x1,ep_y1,0.0);
+	glTexCoord2f(0.0,0.0);
+	glVertex3f(ep_x0,ep_y1,0.0);	
+	glEnd();	
+	*/
+	
+	float dbx = 0.016;
+	
+	float HUDfont_height = 0.04;
+	float HUDfont_width = HUDfont_height * 0.75 / (aspect / (1152.0/768.0) );
+	float lp_y0 = 1.0 - HUDfont_height - dbx*aspect;
+	
+	float dx = -0.008;
+	float dy = 0.0;	
+	
+	//banner
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	glDisable(GL_LIGHTING); 
+	glDisable(GL_DEPTH_TEST);//cos drawing fonts turns them back on, .. maybe that's a bad idea...
+	glEnable(GL_BLEND); 	
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+
+	float banner_alpha = 0.5;
+	float banmarg = 0.25*HUDfont_height;
+	
+	float ban_x0 = dbx - banmarg;
+	float ban_x1 = 1.0-ban_x0;
+	float ban_y0 = lp_y0 - banmarg;
+	float ban_y1 = lp_y0 + HUDfont_height + banmarg;
+	
+	glColor4f(1.0,1.0,1.0,banner_alpha);	
+	
+	mTexture_banner->Apply();
+	glBegin(GL_QUADS);		
+	glTexCoord2f(0.0,1.0);
+	glVertex3f(ban_x0,ban_y0,0.0);
+	glTexCoord2f(1.0,1.0);
+	glVertex3f(ban_x1,ban_y0,0.0);
+	glTexCoord2f(1.0,0.0);
+	glVertex3f(ban_x1,ban_y1,0.0);
+	glTexCoord2f(0.0,0.0);
+	glVertex3f(ban_x0,ban_y1,0.0);
+	glEnd();	
+	
+	glColor4f(1.0,1.0,1.0,1.0);	
+	
+	
+	Font *font = Game::getFont();	
+	font->SetDimensions(HUDfont_height, HUDfont_width, dx, dy);
+	
+	//float lives_text_location[2] = {0.5*(lp_x0+lp_x1)-0.26*lpx_size,
+	//	                            0.5*(lp_y0+lp_y1)-0.06*lpy_size};
+	float lives_text_location[2] = {dbx,lp_y0};
+	font->Home();
+	font->SetCursorLocation(lives_text_location);
+	
+	Player *player = Game::getPlayer();
+	int playerlives = player->GetLives();
+	char playerlives_string[5];
+	sprintf(playerlives_string,"P%d",playerlives);
+	font->PrintString(playerlives_string);
+	
+	
+	//float enemylives_text_location[2] = {0.5*(ep_x0+ep_x1)-0.26*epx_size,
+	//									 0.5*(ep_y0+ep_y1)-0.06*epy_size};
+	float enemylives_text_location[2] = {1.0-dbx-2.0*HUDfont_width,lp_y0};
+
+	
+	font->Home();
+	font->SetCursorLocation(enemylives_text_location);
+	
+	World *theWorld = Game::getWorld();
+	int enemylives = theWorld->enemy.GetLives();
+	char enemylives_string[5];
+	sprintf(enemylives_string,"E%d",enemylives);
+	font->PrintString(enemylives_string);
+	
+	//level indicator
+	float level_text_location[2] = {0.333-HUDfont_width,lp_y0};
+	font->Home();
+	font->SetCursorLocation(level_text_location);
+	
+	int level = Game::getGame()->getLevel();
+	char level_string[5];
+	sprintf(level_string,"L%d",level);
+	font->PrintString(level_string);
+	
+	//score panel
+	float score_text_location[2] = {0.666-HUDfont_width,lp_y0};
+	font->Home();
+	font->SetCursorLocation(score_text_location);
+	
+	int score = player->GetScore();
+	char score_string[5];
+	sprintf(score_string,"S%d",score);
+	font->PrintString(score_string);
+			
+	
+	
+}
+
+
+void HUD::SetTextures()
+{
+	//at the moment, these are loaded once on running the first game level and used until the app is quit
+	TextureLibrary *texturelibrary = Game::getTextureLibrary();
+	string resourcepath = FileUtils::GetApplicationResourcesFolderPath();
+	string texturepath;
+
+	texturepath = resourcepath + kScanner;
+	mTexture_scanner = texturelibrary->GetTexture(texturepath, NO_MIPMAPS);
+	
+	texturepath = resourcepath + kScanner_TL_light;
+	mTexture_scannerTL_light = texturelibrary->GetTexture(texturepath, NO_MIPMAPS);
+	
+	texturepath = resourcepath + kScanner_BL_light;
+	mTexture_scannerBL_light = texturelibrary->GetTexture(texturepath, NO_MIPMAPS);
+	
+	texturepath = resourcepath + kScanner_dot;
+	mTexture_scannerdot = texturelibrary->GetTexture(texturepath, NO_MIPMAPS);
+	
+	texturepath = resourcepath + kBanner;
+	mTexture_banner = texturelibrary->GetTexture(texturepath, NO_MIPMAPS);
+}
+
+
+
+void HUD::PauseTimers()
+{	
+	for (enum sl_name sl = RED_SL; sl<= BLUE_SL; sl=sl_name(sl+1)) 
+		slTimer[sl].pause();		
+}
+void HUD::UnpauseTimers()
+{	
+	for (enum sl_name sl = RED_SL; sl<= BLUE_SL; sl=sl_name(sl+1)) 
+		slTimer[sl].unpause();		
+}
+

@@ -1,0 +1,291 @@
+
+#include "Game.h"
+#include "geometry.h"
+#include "FileUtils.h"
+#include "Filenames.h"
+
+#include <string>
+#include <iostream>
+#include <assert.h>
+using std::string;
+using std::cout;
+using std::endl;
+
+float ran2(long *idum);
+inline float FMAX(float arg1, float arg2)
+{
+	return (arg1 > arg2 ? arg1 : arg2);	
+}
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+const unsigned int Ncyl = 32;
+const unsigned int min_lod_cyl = 1;
+const unsigned int max_lod_cyl = 7;
+
+const float FADE_IN_TIME = 3.0;
+const float START_RUN_TIME = 3.0;
+
+
+Hyperspace::Hyperspace(int level_num)
+{
+	level = level_num;
+	
+	const int mNgrid = 32;
+	const int mN_LOD_Cells = 4;
+	const int mN_regions = 7;
+	const int mN_LOD_levels = 2;
+	const int mSeed = -level;	
+	const float mTerrain_edge_size = 1.0;
+	const float mTerrain_texture_cover = 4.0;
+	const float mAmp = 0.0; 
+	const float mNp = -1.0; 
+	const int mKtrunc = 4;
+		
+	terrain = new Terrain(mNgrid,
+						  mN_LOD_Cells,
+						  mN_regions,
+						  mN_LOD_levels,
+						  mSeed,
+						  mTerrain_edge_size,
+						  mTerrain_texture_cover,
+						  mAmp,
+						  mNp,
+						  mKtrunc);
+	
+	loadTextures();
+	createCylinders();
+}
+
+Hyperspace::~Hyperspace()
+{
+	//delete cylinder field
+	Cylinder *pCyl;
+	
+	for (vector<GameObject*>::iterator iter = cylinder_field_HS.begin(); 
+		 iter != cylinder_field_HS.end(); ++iter) 
+	{
+		pCyl = (Cylinder*)*iter;
+		delete pCyl;
+	}
+	cylinder_field_HS.clear();
+	free_cylinder_lookup_tables_HS(max_lod_cyl,min_lod_cyl);
+	delete terrain;
+}
+
+void Hyperspace::Start()
+{
+	hyperspaceTimer.start();
+}
+
+
+void Hyperspace::draw()
+{			
+	//terrain->draw();
+	
+	//draw cylinder field
+	for (vector<GameObject*>::iterator iter = cylinder_field_HS.begin();
+		 iter != cylinder_field_HS.end(); ++iter) 
+	{
+		(*iter)->draw();
+	}
+	
+	float alpha = 1.0-hyperspaceTimer.time()/FADE_IN_TIME;
+	if (alpha>=0.0) drawFadeIn(alpha); 
+
+}
+
+/* draw a screen covering quad which starts opaque and becomes transparent, 
+   revealing hyperspace, as player begins to accelerate */
+void Hyperspace::drawFadeIn(float alpha)
+{
+	glColor4f(0.0,0.0,0.0,alpha);
+	
+	glDisable(GL_LIGHTING);
+	glDisable(GL_DEPTH_TEST);	
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+	
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();	
+	glLoadIdentity();
+	glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);	
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+	
+	glBegin(GL_QUADS);		
+	glVertex2f(0.0,0.0);
+	glVertex2f(1.0,0.0);
+	glVertex2f(1.0,1.0);
+	glVertex2f(0.0,1.0);
+	glEnd();
+	
+	glPopMatrix();	
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();		
+	glMatrixMode(GL_MODELVIEW);
+	
+	glEnable(GL_LIGHTING);
+	glEnable(GL_DEPTH_TEST);	
+	glDisable(GL_BLEND);
+	
+	glColor4f(1.0,1.0,1.0,1.0);
+}
+
+
+void Hyperspace::createCylinders()
+{
+	Cylinder *pCyl;
+
+	unsigned int n,m;
+	edge_size = terrain->getTerrainEdgeSize();
+	
+	float *cyl_posx = new float[Ncyl];
+	float *cyl_posy = new float[Ncyl];
+	
+	float max_cyl_radius = 8.5e-3; //this must be less than terrain_edge_size/COLLISION_GRID
+	assert( max_cyl_radius < edge_size/COLLISION_GRID_HS );
+	float min_cyl_radius = 3.0e-3;	
+	float max_cyl_height = 6.2e-2;
+	float min_cyl_height = 4.75e-2;
+	
+	gen_cylinder_lookup_tables_HS(min_lod_cyl,max_lod_cyl);
+	
+	/* generate a random cylinder field */
+	float dpos[2], dist;
+	bool clash;	
+	n=0;
+	
+	float min_dist = max_cyl_radius;
+	
+	while (n<Ncyl)
+	{		
+		do 
+		{
+			clash = false;
+			
+			cyl_posx[n] =  ran2(&seed)*(edge_size);
+			cyl_posy[n] =  ran2(&seed)*(edge_size);			
+						
+			/* test if this fits into the field generated so far. If not, regenerate */
+			for (unsigned int m=0;m<n;m++) 
+			{
+				dpos[0] = cyl_posx[n] - cyl_posx[m];						
+				dpos[1] = cyl_posy[n] - cyl_posy[m];									
+				dist = magnitude2d(dpos);
+				if (dist<min_dist) 
+				{
+					clash=true;
+					break;
+				}
+			}
+			
+		} while (clash == true);
+		
+		++n;
+	}
+	
+	/* create cylinders with these positions and random (within limits) radius and height */
+	float cyl_radius, cyl_height;					
+	int num=0;
+	for (vector<GameObject*>::size_type i=0; i != Ncyl; ++i)
+	{		
+		cyl_radius = min_cyl_radius+ran2(&seed)*(max_cyl_radius-min_cyl_radius);
+		cyl_height = min_cyl_height+ran2(&seed)*(max_cyl_height-min_cyl_height);
+		
+		pCyl = new Cylinder(cyl_posx[num], cyl_posy[num], 
+							cyl_radius, cyl_height,
+							max_lod_cyl,min_lod_cyl,
+							cylinder_texture,
+							terrain);
+		
+		cylinder_field_HS.push_back(pCyl);
+		
+		pCyl->getCollisiongridIndices(&n,&m);
+		cylinder_collison_list_HS[n][m].push_back(pCyl);
+		
+		num++;
+	}			
+				
+	delete [] cyl_posx;
+	delete [] cyl_posy;	
+}
+
+void Hyperspace::loadTextures()
+{
+	TextureLibrary *texturelibrary = Game::getTextureLibrary();
+	string resourcepath = FileUtils::GetApplicationResourcesFolderPath();
+	
+	cylinder_texture = kStoneTexture512;
+	texturelibrary->GetTexture(resourcepath + cylinder_texture, BUILD_MIPMAPS);
+			
+	terrain->SetTexture(kTerrainLarge);		
+}
+
+
+/***************************************************************************/
+/*                  cylinder field collision detection                     */
+/***************************************************************************/
+
+inline void Hyperspace::wraptogrid(int *np)
+{	
+	if(*np==COLLISION_GRID_HS) *np=0; 
+	if(*np==-1) *np=COLLISION_GRID_HS-1;
+}
+
+/* test for collision between player and the cylinder field */
+Cylinder* Hyperspace::TestCollision_PlayerCylinder(float *candidate_point)
+{	
+	int n = int((float)COLLISION_GRID_HS*candidate_point[0]/edge_size);
+	int m = int((float)COLLISION_GRID_HS*candidate_point[1]/edge_size);	
+	
+	if (n==COLLISION_GRID_HS) n-=1;
+	if (m==COLLISION_GRID_HS) m-=1;
+	
+	Cylinder *pCyl;	
+	for(int np=-1;np<=1;np++) 
+	{
+		for(int mp=-1;mp<=1;mp++) 
+		{	
+			pCyl = checkcylinders_playercollision(n+np,m+mp,candidate_point);
+			if (pCyl!=NULL) break;
+		}
+		if (pCyl!=NULL) break;
+	}
+	return pCyl;	
+}
+
+
+Cylinder* Hyperspace::checkcylinders_playercollision(int n, int m, float *candidate_point)
+{
+	wraptogrid(&n);
+	wraptogrid(&m);
+	
+	bool collide;
+	Cylinder *pCyl = NULL;
+	
+	if (cylinder_collison_list_HS[n][m].empty()) collide = false;
+	else 
+		for (vector<Cylinder*>::iterator iter = cylinder_collison_list_HS[n][m].begin();
+			 iter != cylinder_collison_list_HS[n][m].end(); ++iter) 
+		{			
+			collide = (*iter)->TestCollisionPlayer(candidate_point);
+			if (collide) pCyl = *iter;
+			if (collide) break;
+		};
+	
+	return pCyl;
+}
+
+void Hyperspace::PauseTimers()
+{
+	hyperspaceTimer.pause();
+}
+
+void Hyperspace::UnpauseTimers()
+{
+	hyperspaceTimer.unpause();
+}

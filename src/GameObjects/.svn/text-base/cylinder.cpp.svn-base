@@ -1,0 +1,408 @@
+
+#include "Game.h"
+#include "geometry.h"
+#include "terrain.h"
+#include "cylinder.h"
+#include "memory.h"
+
+
+//closest distance of approach of player to cylinder in cylinder radii
+#define MIN_PLAYER_CYLINDER_APPROACH 1.5
+
+float ran2(long *idum);
+
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+
+
+Cylinder::Cylinder(float cyl_posx, 
+				   float cyl_posy, 
+				   float cyl_radius,
+				   float cyl_height,
+				   int cyl_max_lod, int cyl_min_lod,
+				   string inTextureName,
+				   Terrain* localterrain) //constructor
+{
+	float mat_shin[1] = {20.0};
+	float mat_spec[4] = {0.3, 0.3, 0.2, 1.0};	
+	//float mat_diff[4] = {1.0, 0.1, 0.0, 1.0};
+	float mat_diff[4] = {0.2, 0.5, 0.9, 1.0};
+	float mat_ambi[4] = {0.0, 0.0, 0.0, 1.0};
+	float mat_emis[4] = {0.8, 0.0, 0.2, 1.0};
+	float mEmission[4] = {0.0,0.0,0.0,1.0};
+	for (int a=0;a<4;a++)
+		no_emission[a] = mEmission[a];	
+		
+	mat_shininess[0] = mat_shin[0];
+	for (int a=0;a<3;a++) {
+		mat_specular[a] = mat_spec[a];
+		mat_diffuse[a] = mat_diff[a];
+		mat_ambient[a] = mat_ambi[a];
+		mat_emission[a] = mat_emis[a];
+	}	
+
+	terrain = localterrain;
+	
+	position[0] = cyl_posx;
+	position[1] = cyl_posy;
+	position[2] = terrain->height(position[0],position[1]);
+	terrain_edge_size = terrain->getTerrainEdgeSize();
+
+	inner_rad = cyl_radius;
+	//radius = cyl_radius;
+	height = cyl_height;
+
+	MIN_LOD = cyl_min_lod;
+	MAX_LOD = cyl_max_lod;
+
+	flute_size = 1.5; //in inner radii
+	radius = flute_size*inner_rad; //flute outer radius
+	cylinder_texture_cover_x = 12.0;
+	
+	/*  flute around each cylinder base has vertices mergevertex[a][b][c], where:
+		a = (current LOD of the cylinder)-MIN_LOD 
+		b = vertex number around ring (num. of cylinder sides = 4*(current LOD of the cylinder) )
+		c = 0,1,2 for x,y,z          */
+	mergevertex = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,2);
+	mergenormal = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,2);
+	Nlayers = 6;
+	mergevertex_x = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	mergevertex_y = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	mergevertex_z = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	mergenormal_x = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	mergenormal_y = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	mergenormal_z = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	vcoord = f3matrix(0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	constructFlute();
+	
+	//texture
+	TextureLibrary *texturelibrary = Game::getTextureLibrary();
+	string texturepath = FileUtils::GetApplicationResourcesFolderPath() + inTextureName;
+	mTexture = texturelibrary->GetTexture(texturepath, BUILD_MIPMAPS);
+	
+	//mirrors
+	N_regions = terrain->getNregions();
+	mirror = matrix(0,N_regions*N_regions-1,0,2);	
+	midpnt = 0.5*float(N_regions-1);
+	middle = (N_regions-1)/2;
+	
+	culldistance = 0.5*midpnt*terrain_edge_size; //distance beyond which cylinders not drawn
+	
+	for (int a=0;a<N_regions;a++)
+		for (int b=0;b<N_regions;b++) 
+		{			
+			mirror[a+N_regions*b][0] = position[0] + ((float)a-midpnt)*terrain_edge_size;
+			mirror[a+N_regions*b][1] = position[1] + ((float)b-midpnt)*terrain_edge_size;	
+			mirror[a+N_regions*b][2] = position[2];
+		}				
+}
+
+float Cylinder::fluteshape(float x)
+{	
+	return (1.0-3.0*SQR(x)*(1.0-x)*(flute_size-1.0));
+}
+
+void Cylinder::constructFlute()
+{
+	int i;
+	
+	for (int lod=MIN_LOD;lod<=MAX_LOD;lod++) {
+		
+		float sa_l = sa[lod-MIN_LOD];
+		float ca_l = ca[lod-MIN_LOD];
+		
+		float ny=1; 
+		float nz=0;
+		float tmp;
+
+		lip = 0.5;
+		lipheight = lip*height;
+		
+		int n = 4*lod;	// number of sides to the cylinder (divisible by 4)
+		
+		for (i=0; i<=n; i++) {
+			mergevertex[lod-MIN_LOD][i][0] = ny*inner_rad;
+      		mergevertex[lod-MIN_LOD][i][1] = nz*inner_rad;
+			mergevertex[lod-MIN_LOD][i][2] = -0.2*lipheight + terrain->height( position[0] + mergevertex[lod-MIN_LOD][i][0],
+																			   position[1] + mergevertex[lod-MIN_LOD][i][1] );
+			
+			mergenormal[lod-MIN_LOD][i][0] = ny;
+			mergenormal[lod-MIN_LOD][i][1] = nz;
+			mergenormal[lod-MIN_LOD][i][2] = 0.0;
+			
+			// rotate ny,nz
+			tmp = ca_l*ny - sa_l*nz;
+			nz  = sa_l*ny + ca_l*nz;
+			ny = tmp;
+		}
+			
+		float cyltop = position[2]+0.5*height;
+		float inner, zinner, zin;	
+		
+		cylinder_texture_cover_z = cylinder_texture_cover_x * (height/(2.0*M_PI*inner_rad)); //adjust for aspect
+		
+		for (int layer=0;layer<=Nlayers;layer++) {
+				
+			inner = ((float)layer)/((float)Nlayers);
+			zin  = lipheight*(1.0-inner);
+			
+			for (i=0; i<=n; i++) {	
+				
+				zinner = mergevertex[lod-MIN_LOD][i][2]+zin;
+				mergevertex_x[lod-MIN_LOD][i][layer] = fluteshape(inner)*mergevertex[lod-MIN_LOD][i][0];
+				mergevertex_y[lod-MIN_LOD][i][layer] = fluteshape(inner)*mergevertex[lod-MIN_LOD][i][1];
+				mergevertex_z[lod-MIN_LOD][i][layer] = zinner;
+				
+				//TO DO: rotate flute layer normals correctly
+				mergenormal_x[lod-MIN_LOD][i][layer] = mergenormal[lod-MIN_LOD][i][0];
+				mergenormal_y[lod-MIN_LOD][i][layer] = mergenormal[lod-MIN_LOD][i][1];
+				mergenormal_z[lod-MIN_LOD][i][layer] = mergenormal[lod-MIN_LOD][i][2];
+								
+				vcoord[lod-MIN_LOD][i][layer] = cylinder_texture_cover_z*(cyltop-zinner)/height;
+
+			}
+		}				
+	}		
+}
+
+
+Cylinder::~Cylinder() //destructor
+{
+	free_matrix(mirror,0,N_regions*N_regions-1,0,2);
+	free_f3matrix(mergevertex,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,2);
+	free_f3matrix(mergenormal,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,2);
+	free_f3matrix(mergevertex_x,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	free_f3matrix(mergevertex_y,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	free_f3matrix(mergevertex_z,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	free_f3matrix(mergenormal_x,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	free_f3matrix(mergenormal_y,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	free_f3matrix(mergenormal_z,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+	free_f3matrix(vcoord,0,MAX_LOD-MIN_LOD,0,4*MAX_LOD,0,Nlayers);
+};
+
+
+int Cylinder::getLOD(float *view_point)
+{
+	//find distance to all mirror copies in central 9 regions, and choose the smallest
+	int a = middle-1;
+	int b = middle+1;
+	
+	float mindist = sqrdistance(mirror[a+N_regions*b],view_point);
+	
+	float d;
+	for (a=middle-1;a<=middle+1;a++) 
+		for (b=middle-1;b<=middle+1;b++) 
+		{
+			d = sqrdistance(mirror[a+N_regions*b],view_point);
+			if (d<mindist) mindist = d;
+		}
+			
+	mindist = (float)sqrt(mindist) / (0.5*terrain_edge_size);
+	
+	int l;
+	if (mindist>1.0) 
+		l = MIN_LOD;
+	else 
+		l = static_cast<int>( MIN_LOD+(1.0-mindist)*(MAX_LOD-MIN_LOD) );
+
+	if (l==MAX_LOD+1) l-=1;
+	
+	return l;
+}
+
+float Cylinder::sqrdistance(float *p1, float *p2)
+{
+	float sqrdist = 0.0;
+	for(int a=0;a<3;a++) {
+		sqrdist += SQR(p1[a]-p2[a]); 
+	}
+	return sqrdist;
+}
+
+/* test if a point lies in front (return false) of the player view plane or behind (return true) */
+inline bool Cylinder::cull(float *point, float *view_point, float *view_dir)
+{
+	float dirvec[3];
+	for (int a=0;a<3;a++) {
+		dirvec[a] = point[a]-view_point[a];
+	}	
+	if (scalarprod(dirvec,view_dir)<-0.01) return true;	
+	return false;	
+}
+
+void Cylinder::draw(void)
+{		
+	Player *player = Game::getPlayer();
+	
+	float *view_dir = player->GetViewDirection();
+	float *view_point = player->GetViewPoint();
+		
+	float zoffset = 0.0;
+	
+	glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, mat_shininess);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, mat_specular);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, mat_diffuse);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, mat_ambient);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, mat_emission);
+	
+	glEnable(GL_LIGHTING);
+	glShadeModel (GL_SMOOTH);
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	glTexEnvf(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
+	mTexture->Apply();
+	
+	/* draw cylinder+flute and all mirror copies */
+	int N_lod = getLOD(view_point);
+	
+	for (int a=0;a<N_regions*N_regions;a++) 		
+	{				
+		if (  !cull(mirror[a],view_point,view_dir)
+			&& visible(mirror[a],view_point,culldistance) ) 
+		{
+			drawCylinder(mirror[a],height,inner_rad,zoffset,N_lod,MIN_LOD,cylinder_texture_cover_x,cylinder_texture_cover_z);
+			//drawFlute(mirror[a],N_lod);
+		}
+	}
+	
+	glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, no_emission);
+}
+
+
+void Cylinder::drawFlute(float *pos, int lod)
+{
+	int Nsides = 4*lod;
+
+	glPushMatrix();
+	glTranslatef(pos[0],pos[1],0.0);
+	
+	float u;
+
+	glShadeModel (GL_SMOOTH);
+	glBegin (GL_TRIANGLE_STRIP);
+
+	for (int layer=0;layer<Nlayers;layer++) {
+			
+		for (int i=0; i<=Nsides; i++) {	
+
+			u = cylinder_texture_cover_x*(float)i/(float)Nsides;
+			
+			glTexCoord2f( u, vcoord[lod-MIN_LOD][i][layer] );
+			glNormal3f ( mergenormal_x[lod-MIN_LOD][i][layer],
+						 mergenormal_y[lod-MIN_LOD][i][layer],
+						 mergenormal_z[lod-MIN_LOD][i][layer] );
+			glVertex3f ( mergevertex_x[lod-MIN_LOD][i][layer],
+						 mergevertex_y[lod-MIN_LOD][i][layer],
+						 mergevertex_z[lod-MIN_LOD][i][layer] );
+			
+			glTexCoord2f( u, vcoord[lod-MIN_LOD][i][layer+1] );
+			glNormal3f ( mergenormal_x[lod-MIN_LOD][i][layer+1],
+						 mergenormal_y[lod-MIN_LOD][i][layer+1],
+						 mergenormal_z[lod-MIN_LOD][i][layer+1] );		
+			glVertex3f ( mergevertex_x[lod-MIN_LOD][i][layer+1],
+						 mergevertex_y[lod-MIN_LOD][i][layer+1],
+						 mergevertex_z[lod-MIN_LOD][i][layer+1] );
+			
+		}
+
+	}
+	glEnd();
+
+	glPopMatrix();
+}
+
+float Cylinder::getRadius()
+{
+	return radius;
+}
+float* Cylinder::GetPosition()
+{
+	return position;
+}
+
+
+/****************************************************************/
+/*                      collision detection                     */
+/****************************************************************/
+
+void Cylinder::getCollisiongridIndices(unsigned int *n, unsigned int *m)
+{
+	*n = static_cast<unsigned int> ((float)COLLISION_GRID*position[0]/terrain_edge_size);
+	*m = static_cast<unsigned int> ((float)COLLISION_GRID*position[1]/terrain_edge_size);	
+	if (*n==COLLISION_GRID) *n-=1;
+	if (*m==COLLISION_GRID) *m-=1;
+}
+
+/* does cylinder intersect with a ray beginning at x1 and ending at x2? 
+   (returns false if x1[] == x2[])
+*/
+bool Cylinder::TestCollisionRayInterval(float *x1,
+										float *x2)
+{
+	float deltax[3], temp1[3];	
+	for(int a=0;a<2;a++) {
+		deltax[a] = x2[a]-x1[a];
+		temp1[a] = position[a]-x1[a];
+	}
+			
+	float temp2 = scalarprod2d(deltax,temp1);
+	float temp3 = scalarprod2d(deltax,deltax);
+	if (temp3==0.0) {
+		printf("error: zero length ray in Cylinder::TestCollisionRayInterval\n");
+		return false;
+	}
+	
+	float lambda = temp2/temp3;
+	if (lambda<0.0 || lambda>1.0) return false; //interval does not intersect cylinder
+	
+	float temp4[3];
+	for(int a=0;a<2;a++) temp4[a] = lambda*deltax[a] - temp1[a];
+	float bsqr = scalarprod2d(temp4,temp4);		
+	return (bsqr<=SQR(radius));
+}
+
+bool Cylinder::TestCollisionPoint(float *candidate_point)
+{
+	float sqrdist = 0.0;
+	for(int a=0;a<2;a++) 
+		sqrdist += SQR(candidate_point[a]-position[a]); 
+	return sqrdist<=SQR(radius);
+}
+
+bool Cylinder::TestCollisionPlayer(float *candidate_point)
+{
+	float sqrdist = 0.0;
+	for(int a=0;a<2;a++) 
+		sqrdist += SQR(candidate_point[a]-position[a]); 
+	return sqrdist<=SQR(MIN_PLAYER_CYLINDER_APPROACH*radius);
+}
+
+bool Cylinder::TestCollisionPortal(float *candidate_point, float portal_length)
+{
+	float sqrdist = 0.0;
+	for(int a=0;a<2;a++) {
+		sqrdist += SQR(candidate_point[a]-position[a]); 
+	}
+	return sqrdist<=SQR(radius+portal_length);	
+}
+
+bool Cylinder::TestCollisionBullet(float *candidate_point, float bulletRadius)
+{
+	float sqrdist = 0.0;
+	for(int a=0;a<2;a++) {
+		sqrdist += SQR(candidate_point[a]-position[a]); 
+	}
+	return sqrdist<=SQR(radius+bulletRadius);
+}
+
+bool Cylinder::TestCollisionEnemy(float *candidate_point, float enemyRadius)
+{
+	float sqrdist = 0.0;
+	for(int a=0;a<2;a++) 
+		sqrdist += SQR(candidate_point[a]-position[a]); 
+	return sqrdist <= SQR(radius+enemyRadius);
+}
+

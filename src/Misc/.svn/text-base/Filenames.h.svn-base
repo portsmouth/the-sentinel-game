@@ -1,0 +1,58 @@
+
+//Textures
+
+//cylinders
+#define kStoneTexture512 std::string("/Textures/stonetile512.bmp")
+#define kCylinderTexture1 std::string("/Textures/cylinder_panel_simple.jpg")
+
+//bullets
+#define kStoneTexture256 std::string("/Textures/stonetile256.bmp")
+#define kBeamPlayer std::string("/Textures/beam3.bmp")
+#define kBeamEnemy std::string("/Textures/beam4.bmp")
+
+//terrain
+#define kTerrainLarge std::string("/Textures/terrain_border.jpg")
+
+//sky
+#define kSkybox std::string("/Textures/skybox/")
+
+#define kUP std::string("sbox_up.jpg")
+#define kDOWN std::string("sbox_down.jpg")
+#define kFRONT std::string("sbox_front.jpg")
+#define kBACK std::string("sbox_back.jpg")
+#define kLEFT std::string("sbox_left.jpg")
+#define kRIGHT std::string("sbox_right.jpg")
+
+//skybox test textures
+/*
+#define kUP std::string("skybox_test_UP.jpg")
+#define kDOWN std::string("skybox_test_DOWN.jpg")
+#define kFRONT std::string("skybox_test_FRONT.jpg")
+#define kBACK std::string("skybox_test_BACK.jpg")
+#define kLEFT std::string("skybox_test_LEFT.jpg")
+#define kRIGHT std::string("skybox_test_RIGHT.jpg")
+*/
+
+#define kMoonTexture512 std::string("/Textures/rhea_cassini_big.bmp")
+#define kStar1 std::string("/Textures/star1.bmp")
+
+//font
+#define kFontGrid std::string("/Textures/8x8grid256_flat3.bmp")
+
+//scanner
+#define kScanner std::string("/Textures/multiscanner/scanner.bmp")
+#define kScanner_TL_border std::string("/Textures/multiscanner/sub_tl.bmp")
+#define kScanner_TL_light std::string("/Textures/multiscanner/sub_tl_light.bmp")
+#define kScanner_BL_light std::string("/Textures/multiscanner/sub_bl_light.bmp")
+#define kScanner_dot std::string("/Textures/multiscanner/scanner_dot.bmp")
+
+//HUD
+#define kLivespanel std::string("/Textures/lives_panel.bmp")
+#define kEnemypanel std::string("/Textures/enemy_panel.bmp")
+#define kBanner std::string("/Textures/HUDbanner.bmp")
+
+
+//titles
+#define kButtonOn std::string("/Textures/button_on.bmp")
+#define kButtonOff std::string("/Textures/button_off.bmp")
+

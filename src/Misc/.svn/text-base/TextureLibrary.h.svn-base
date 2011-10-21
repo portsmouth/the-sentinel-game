@@ -1,0 +1,52 @@
+
+
+#ifndef TEXTURELIBRARY_H
+#define TEXTURELIBRARY_H
+
+#include <string>
+#include <map>
+#include <OpenGL/gl.h>
+
+/* Texture class */
+
+enum mipmap_modes {NO_MIPMAPS, BUILD_MIPMAPS};
+
+class Texture {
+	
+public:
+	Texture();
+	~Texture();
+	
+	void Load(std::string inFilename);
+	void Apply();	
+	GLuint GetTextureName() const;
+	enum mipmap_modes mipmapmode;
+	
+private:
+	GLuint TextureName;
+	unsigned int mWidth;
+	unsigned int mHeight;	
+	unsigned int mDepth;
+	
+};
+
+/* Texture library class */
+
+class TextureLibrary {
+	
+public:	
+	TextureLibrary(); //constructor
+	~TextureLibrary(); //destructor
+	//mmm is a mipmap_mode enum, either NO_MIPMAPS or BUILD_MIPMAPS
+	Texture* GetTexture(std::string inName, mipmap_modes mmm) const;
+	void FreeTexture(std::string inName);
+		
+private:
+
+protected:
+	typedef std::map<std::string, Texture*> TextureContainer;
+	mutable TextureContainer Textures;
+	
+};
+
+#endif //TEXTURELIBRARY_H

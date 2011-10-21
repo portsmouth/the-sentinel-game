@@ -1,0 +1,96 @@
+
+#ifndef GAME_H
+#define GAME_H
+
+#include "world.h"
+#include "EventManager.h"
+#include "Player.h"
+#include "SDLview.h"
+#include "HUD.h"
+#include "Font.h"
+#include "Titles.h"
+#include "Sound.h"
+#include "TextureLibrary.h"
+#include "Controls.h"
+#include "Timer.h"
+#include "Portal.h"
+#include "Hyperspace.h"
+
+/* #define NDEBUG */ //uncomment to strip assert() calls
+
+#define MAXIMUM_FRAME_RATE 100
+#define MINIMUM_FRAME_RATE 15
+//UINT = UINT
+#define UINT (1.0 / MAXIMUM_FRAME_RATE)
+//MCPF = MAX_CYCLES_PER_FRAME
+#define MCPF (MAXIMUM_FRAME_RATE / MINIMUM_FRAME_RATE)
+
+class Game {
+	
+public:	
+	Game(); //constructor
+	~Game(); //destructor
+	
+	void mainLoop();
+	void drawFrame();
+
+	SDLview sdlview_instance;
+	EventManager eventmanager_instance;
+	Player player_instance;
+	HUD hud_instance;
+	Font font_instance;
+	Titles titles_instance;
+	Sound sound_instance;
+	TextureLibrary texturelibrary_instance;
+	Portal portal_instance;
+	Controls controls_instance;
+	
+	static Game* getGame();
+	static EventManager* getEventManager();
+	static World* getWorld();
+	static Player* getPlayer();
+	static SDLview* getSDLview();
+	static HUD* getHUD();
+	static Font* getFont();
+	static Titles* getTitles();
+	static Sound* getSound();
+	static TextureLibrary* getTextureLibrary();
+	static Portal* getPortal();
+	static Controls* getControls();
+	static Hyperspace* Game::getHyperspace();
+
+	int getLevel();
+
+private:
+
+	UserAction Game::update(Player_States *ps, 
+							Enemy_States *es, 
+							level_status *ls);
+	UserAction Game::pause(Player_States *ps, 
+						   Enemy_States *es, 
+						   level_status *ls);
+	void gameGLsettings();
+	
+	level_status playLevel();
+	level_status ls;
+	int level;
+	
+	static Game* pGame;
+	static EventManager* pEventManager;
+	static World* pWorld;
+	static Player* pPlayer;
+	static SDLview* pSDLview;
+	static HUD* pHUD;
+	static Font* pFont;
+	static Titles* pTitles;
+	static Sound* pSound;
+	static TextureLibrary* pTextureLibrary;
+	static Portal* pPortal;
+	static Controls* pControls;
+	static Hyperspace* pHyperspace;
+
+	Timer LFT; //LastFrameTimer
+	Timer LET; //LevelEntryTimer
+};
+
+#endif //GAME_H

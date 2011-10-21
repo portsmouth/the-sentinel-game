@@ -1,0 +1,44 @@
+/*
+ *  memory.h
+ *  EncounterX
+ *
+ *  Created by Jamie Portsmouth on 14/01/2006.
+ *  Copyright 2006 __MyCompanyName__. All rights reserved.
+ *
+ */
+
+//dynamically allocated multi-dimensional arrays
+
+#ifndef MEMORY_H
+#define MEMORY_H
+
+void memerror(char errortxt[]);
+
+//1d arrays
+float *fvector(long nlow, long nhigh);
+int *ivector(long nlow, long nhigh);
+unsigned char *cvector(long nlow, long nhigh);
+unsigned long *lvector(long nlow, long nhigh);
+double *dvector(long nlow, long nhigh);
+void free_fvector(float *v, long nlow, long nhigh);
+void free_ivector(int *v, long nlow, long nhigh);
+void free_cvector(unsigned char *v, long nlow, long nhigh);
+void free_lvector(unsigned long *v, long nlow, long nhigh);
+void free_dvector(double *v, long nlow, long nhigh);
+
+//2d arrays
+float **matrix(long ilr, long ihr, long ilc, long ihc);
+double **dmatrix(long ilr, long ihr, long ilc, long ihc);
+int **imatrix(long ilr, long ihr, long ilc, long ihc);
+void free_matrix(float **m, long ilr, long ihr, long ilc, long ihc);
+void free_dmatrix(double **m, long ilr, long ihr, long ilc, long ihc);
+void free_imatrix(int **m, long ilr, long ihr, long ilc, long ihc);
+
+//3d arrays
+float ***f3matrix(long ilr, long ihr, long ilc, long ihc, long ild, long ihd);
+void free_f3matrix(float ***t, long ilr, long ihr, long ilc, long ihc,
+				   long ild, long ihd);
+
+#endif //MEMORY_H
+
+

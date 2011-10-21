@@ -1,0 +1,544 @@
+
+#include "Game.h"
+#include "Font.h"
+#include "Titles.h"
+
+
+Titles::Titles() //constructor
+{
+	/* title screen buttons */
+	oncolor[0] = 0.8;
+	oncolor[1] = 0.8;
+	oncolor[2] = 0.8;
+	
+	offcolor[0] = 0.5;
+	offcolor[1] = 0.5;
+	offcolor[2] = 0.5;
+	
+	float button_width = 0.4;
+	float button_height = 0.06;
+	float xflush = 0.5*(1.0-button_width);
+	float button_top = 0.6;
+	float button_space = 0.1;
+	
+	title_newgame.dx = button_width; 
+	title_newgame.dy = button_height;
+	title_newgame.x  = xflush; 
+	title_newgame.y  = button_top - 0.0*button_space;	
+	title_newgame.state = false;
+		
+	title_options.dx = button_width; 
+	title_options.dy = button_height;
+	title_options.x  = xflush; 
+	title_options.y  = button_top - 1.0*button_space;
+	title_options.state = false;
+	
+	title_quit.dx    = button_width; 
+	title_quit.dy    = button_height;
+	title_quit.x     = xflush; 
+	title_quit.y     = button_top - 2.0*button_space;
+	title_quit.state = false;	
+	
+	/* pause overlay buttons */
+
+	button_width = 0.3;
+	button_height = 0.075;
+	xflush = 0.5*(1.0-button_width);
+	button_top = 0.6;
+	button_space = 0.14;
+		
+	pause_resume.dx = button_width;
+	pause_resume.dy = button_height;
+	pause_resume.x = xflush;
+	pause_resume.y = button_top - 0.0*button_space;
+	pause_resume.state = false;
+	
+	pause_quit.dx = button_width;
+	pause_quit.dy = button_height;
+	pause_quit.x = xflush;
+	pause_quit.y = button_top - 1.0*button_space;
+	pause_quit.state = false;
+	
+}
+
+
+void Titles::LoadTitlesTextures()
+{
+	TextureLibrary *texturelibrary = Game::getTextureLibrary();
+	string resourcepath = FileUtils::GetApplicationResourcesFolderPath();
+
+	mTexture_buttonOn = texturelibrary->GetTexture(resourcepath + kButtonOn, NO_MIPMAPS);
+	mTexture_buttonOff = texturelibrary->GetTexture(resourcepath + kButtonOff, NO_MIPMAPS);
+
+}
+
+Titles::~Titles() //destructor
+{}
+
+
+void Titles::drawTitleScreen()
+{	
+	static float bgcolor[] = {0.0, 0.0, 0.0, 1.0};
+	glClearColor(bgcolor[0],bgcolor[1],bgcolor[2],bgcolor[3]);	
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	
+	Font *font = Game::getFont();
+	
+	float Titlefont_height = 0.09;
+	float Titlefont_width = 0.06;
+	float titledx = 0.0;
+	float titledy = 0.0;	
+	font->SetDimensions(Titlefont_height, Titlefont_width, titledx, titledy);
+	
+	char title_string[12];
+	float text_location[2];
+	
+	//title image
+	text_location[1] = 0.75;
+	font->Home();
+	font->SetCursorLocation(text_location);	
+	sprintf(title_string,"ENCOUNTER X");
+	font->PrintString_CenterHoriz(title_string);
+	
+	Game::getSDLview()->getViewDims(viewdims);	
+			
+	glDisable(GL_LIGHTING);
+	glDisable(GL_FOG);
+	glDisable(GL_DEPTH_TEST);	
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+	
+	drawButton(&title_newgame);
+	drawButton(&title_options);
+	drawButton(&title_quit);
+	glColor3f(1.0,1.0,1.0);
+	
+	//buttons
+	float buttonborder = 0.2;
+	float glyphfactor = 1.0-buttonborder;
+	font->SetDimensions(glyphfactor*title_newgame.dy, 
+						glyphfactor*0.666*title_newgame.dy, 
+						titledx, titledy);
+	
+	text_location[1] = title_newgame.y - (1.0-0.5*buttonborder)*title_newgame.dy;
+	font->Home();
+	font->SetCursorLocation(text_location);	
+	sprintf(title_string,"NEW GAME");
+	font->PrintString_CenterHoriz(title_string);
+	
+	text_location[1] = title_options.y - (1.0-0.5*buttonborder)*title_newgame.dy;
+	font->Home();
+	font->SetCursorLocation(text_location);
+	sprintf(title_string,"OPTIONS");
+	font->PrintString_CenterHoriz(title_string);
+	
+	text_location[1] = title_quit.y - (1.0-0.5*buttonborder)*title_newgame.dy;
+	font->Home();
+	font->SetCursorLocation(text_location);
+	sprintf(title_string,"QUIT");
+	font->PrintString_CenterHoriz(title_string);
+	
+	SDL_GL_SwapBuffers ();
+}
+
+void Titles::drawButton(button *aButton)
+{
+	if (aButton->state) 
+		mTexture_buttonOn->Apply();
+	else 
+		mTexture_buttonOff->Apply();
+	
+	glBegin(GL_QUADS);		
+	glTexCoord2f(1.0,0.0);
+	glVertex3f(aButton->x,aButton->y,0.0);
+	glTexCoord2f(1.0,1.0);
+	glVertex3f(aButton->x+aButton->dx,aButton->y,0.0);
+	glTexCoord2f(0.0,1.0);
+	glVertex3f(aButton->x+aButton->dx,aButton->y-aButton->dy,0.0);
+	glTexCoord2f(0.0,0.0);
+	glVertex3f(aButton->x,aButton->y-aButton->dy,0.0);
+	glEnd();
+}
+
+void Titles::checkTitleEvents(int *request)
+{	
+	while ( SDL_PollEvent (&event) ) {
+		switch (event.type) {			
+			
+			case SDL_MOUSEMOTION:
+				Mouse_motion(TITLE_SCREEN);
+				break;
+				
+			case SDL_MOUSEBUTTONDOWN:
+				
+				switch (Mouse_button(TITLE_SCREEN)) {
+					
+					case bNULL:						
+						*request = 0;
+						break;
+						
+					case bTitle_Newgame:
+						*request = 1;
+						break;
+						
+					case bTitle_Options:
+						*request = 2;
+						break;
+						
+					case bTitle_Quit:
+						*request = 3;
+						break;
+					
+					default:
+						break;
+				}				
+				break;
+				
+			case SDL_QUIT:
+				*request = 3;
+				break;
+				
+			default:
+				break;
+		}
+	}	
+}
+
+button_names Titles::Mouse_button(title_state ts)
+{
+	int mouse_x, mouse_y;
+	
+	Uint8 result = SDL_GetMouseState(&mouse_x, &mouse_y);
+	
+	float mx, my;
+	mx = (float)mouse_x/viewdims[0];
+	my = 1.0-(float)mouse_y/viewdims[1];
+			
+	if (result&SDL_BUTTON(1)) {
+		
+		switch (ts) {
+
+			case TITLE_SCREEN:
+				if (checkbutton(&title_newgame, mx, my)) 
+					return bTitle_Newgame;
+				 
+				else if (checkbutton(&title_options, mx, my)) 
+					return bTitle_Options;
+				
+				else if (checkbutton(&title_quit, mx, my)) 
+					return bTitle_Quit;
+				
+				break;
+				
+			case PAUSE_OVERLAY:
+				if (checkbutton(&pause_resume, mx, my)) 
+					return bPause_Resume;
+				 
+				else if (checkbutton(&pause_quit, mx, my)) 
+					return bPause_Quit;
+				
+				break;
+
+		}
+				
+	}
+	return bNULL;
+}
+
+
+void Titles::Mouse_motion(title_state ts)
+{
+	int mouse_x, mouse_y;
+	
+	(Uint8)SDL_GetMouseState(&mouse_x, &mouse_y);	
+	
+	float mx, my;
+	mx = (float)mouse_x/viewdims[0];
+	my = 1.0-(float)mouse_y/viewdims[1];
+		
+	switch (ts) {
+		
+		case TITLE_SCREEN:
+			
+			title_newgame.state = checkbutton(&title_newgame, mx, my);
+			title_options.state = checkbutton(&title_options, mx, my);
+			title_quit.state = checkbutton(&title_quit, mx, my);
+			drawTitleScreen();		
+			break;
+			
+		case PAUSE_OVERLAY:
+			
+			pause_resume.state = checkbutton(&pause_resume, mx, my);
+			pause_quit.state = checkbutton(&pause_quit, mx, my);
+			drawPauseOverlay();		
+			break;
+
+	}
+
+}
+
+bool Titles::checkbutton(button *aButton, float mouse_x, float mouse_y)
+{
+	float x  = aButton ->x;
+	float dx = aButton ->dx;
+	float y  = aButton ->y;
+	float dy = aButton ->dy;
+	
+	bool left  = ( mouse_x > x    );
+	bool right = ( mouse_x < x+dx );
+	bool up    = ( mouse_y < y    );
+	bool down  = ( mouse_y > y-dy );
+	
+	if (left && right && up && down) 
+		return true;
+	
+	return false;
+}
+
+void Titles::drawLevelLoadingScreen(int levelnum)
+{
+	
+	static float bgcolor[] = {0.0, 0.0, 0.0, 1.0};
+	glClearColor(bgcolor[0],bgcolor[1],bgcolor[2],bgcolor[3]);	
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	
+	Font *font = Game::getFont();
+	
+	float Titlefont_height = 0.04;
+	float Titlefont_width = 0.03;
+	float titledx = 0.0;
+	float titledy = 0.0;	
+	font->SetDimensions(Titlefont_height, Titlefont_width, titledx, titledy);
+	
+	char title_string[16];
+	float text_location[2];
+	
+	font->Home();
+	text_location[1] = 0.5;
+	font->SetCursorLocation(text_location);	
+	sprintf(title_string,"LEVEL %d LOADING",levelnum);
+	font->PrintString_CenterHoriz(title_string);
+	
+	SDL_GL_SwapBuffers ();
+
+}
+
+void Titles::drawLevelFadeInOverlay(float alpha)
+{
+	if (alpha<0.0) return;
+	
+	glColor4f(0.0,0.0,0.0,alpha);
+	
+	glDisable(GL_LIGHTING);
+	glDisable(GL_DEPTH_TEST);	
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+	
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();	
+	glLoadIdentity();
+	glOrtho(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);	
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+	
+	glBegin(GL_QUADS);		
+	glVertex2f(0.0,0.0);
+	glVertex2f(1.0,0.0);
+	glVertex2f(1.0,1.0);
+	glVertex2f(0.0,1.0);
+	glEnd();
+	
+	glPopMatrix();	
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();		
+	glMatrixMode(GL_MODELVIEW);
+	
+	glEnable(GL_LIGHTING);
+	glEnable(GL_DEPTH_TEST);	
+	glDisable(GL_BLEND);
+	
+	glColor4f(1.0,1.0,1.0,1.0);
+}
+
+void Titles::drawPauseOverlay()
+{
+	Game::getSDLview()->getViewDims(viewdims);	
+	Game::getGame()->drawFrame();
+
+	glDisable(GL_LIGHTING);
+	glDisable(GL_FOG);
+	glDisable(GL_DEPTH_TEST);	
+	glEnable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+
+	drawButton(&pause_resume);
+	drawButton(&pause_quit);
+	glColor4f(1.0,1.0,1.0,1.0);
+	
+	char title_string[12];
+	float text_location[2];
+	Font *font = Game::getFont();
+	
+	float buttonborder = 0.35;
+	float glyphfactor = 1.0-buttonborder;
+	font->SetDimensions(glyphfactor*pause_resume.dy, 
+						glyphfactor*0.666*pause_resume.dy, 
+						0.0, 0.0);
+		
+	text_location[1] = pause_resume.y-(1.0-0.5*buttonborder)*pause_resume.dy;
+	font->SetCursorLocation(text_location);		
+	
+	font->Home();
+	sprintf(title_string,"RESUME");
+	font->PrintString_CenterHoriz(title_string);
+	
+	text_location[1] = pause_quit.y-(1.0-0.5*buttonborder)*pause_quit.dy;
+	font->Home();
+	font->SetCursorLocation(text_location);
+	sprintf(title_string,"QUIT");
+	font->PrintString_CenterHoriz(title_string);
+			
+	SDL_GL_SwapBuffers ();
+}
+
+
+
+void Titles::checkPauseEvents(int *request)
+{
+	while ( SDL_PollEvent (&event) ) 
+	{
+		switch (event.type) 
+		{			
+			case SDL_MOUSEMOTION:
+				Mouse_motion(PAUSE_OVERLAY);
+				break;
+				
+			case SDL_MOUSEBUTTONDOWN:
+				
+				switch (Mouse_button(PAUSE_OVERLAY)) 
+				{
+					case bNULL:						
+						*request = 0;
+						break;
+						
+					case bPause_Resume:
+						*request = 1;
+						break;
+						
+					case bPause_Quit:
+						*request = 2;
+						break;
+						
+					default:
+						break;
+				}				
+				break;
+				
+			case SDL_QUIT:
+				*request = 3;
+				break;
+				
+			default:
+				break;
+		}
+	}		
+	
+}
+
+
+void Titles::drawGameOverOverlay()
+{
+	Game::getSDLview()->getViewDims(viewdims);	
+	
+	glDisable(GL_LIGHTING);
+	glDisable(GL_FOG);
+	glDisable(GL_DEPTH_TEST);	
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	
+	float height = 0.06;
+	float top = 0.5;
+	
+	char title_string[12];
+	float text_location[2];
+	Font *font = Game::getFont();
+	font->SetDimensions(height, 0.666*height, 0.0, 0.0);
+	
+	text_location[1] = top;
+	font->Home();
+	font->SetCursorLocation(text_location);	
+	sprintf(title_string,"GAME OVER");
+	font->PrintString_CenterHoriz(title_string);
+		
+}
+
+void Titles::drawHSFailedOverlay()
+{
+	Game::getSDLview()->getViewDims(viewdims);	
+	
+	glDisable(GL_LIGHTING);
+	glDisable(GL_FOG);
+	glDisable(GL_DEPTH_TEST);	
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	
+	float height = 0.06;
+	float top = 0.5;
+	
+	char title_string[12];
+	float text_location[2];
+	Font *font = Game::getFont();
+	font->SetDimensions(height, 0.666*height, 0.0, 0.0);
+	
+	text_location[1] = top;
+	font->Home();
+	font->SetCursorLocation(text_location);	
+	sprintf(title_string,"FAILED");
+	font->PrintString_CenterHoriz(title_string);
+}
+
+
+void Titles::drawPlayerShotOverlay()
+{
+	Game::getSDLview()->getViewDims(viewdims);	
+	
+	glDisable(GL_LIGHTING);
+	glDisable(GL_FOG);
+	glDisable(GL_DEPTH_TEST);	
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	
+	float height = 0.1;
+	float top = 0.5;
+	
+	char title_string[12];
+	float text_location[2];
+	Font *font = Game::getFont();
+	font->SetDimensions(height, 0.666*height, 0.0, 0.0);
+	
+	text_location[1] = top;
+	font->Home();
+	font->SetCursorLocation(text_location);	
+	sprintf(title_string,"SHOT!");
+	font->PrintString_CenterHoriz(title_string);
+	
+}
+			
+
+

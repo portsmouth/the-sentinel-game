@@ -1,0 +1,57 @@
+
+#ifndef HYPERSPACE_H
+#define HYPERSPACE_H
+
+#include "GameObject.h"
+#include "cylinder.h"
+
+#include <vector>
+#include <string>
+using std::string;
+using std::vector;
+
+#define COLLISION_GRID_HS 32
+
+class Terrain;
+
+class Hyperspace {
+	
+public:	
+	Hyperspace(int level_num); //constructor
+	~Hyperspace(); //destructor
+	void draw();	
+	void drawFadeIn(float alpha);
+	void Start();
+	
+	Cylinder* TestCollision_PlayerCylinder(float *candidate_point);
+	void PauseTimers();
+	void UnpauseTimers();
+
+	Terrain *terrain;
+	
+private:
+		
+	vector<GameObject*> cylinder_field_HS;	
+			
+	/* 2d-array of vectors containing cylinders in each coarse grid cell, for fast C.D. */
+	vector<Cylinder*> cylinder_collison_list_HS[COLLISION_GRID][COLLISION_GRID];
+	
+	void createCylinders();
+	void loadTextures();
+	
+	inline void wraptogrid(int *np);
+	Cylinder* checkcylinders_playercollision(int n, int m, float *candidate_point);
+
+	//(warning: add to list in PauseTimers() if adding a new timer)
+	Timer hyperspaceTimer;
+	
+	//texture names
+	string cylinder_texture;
+	
+	int level;
+	long seed;
+	float edge_size;
+	
+};
+
+#endif // HYPERSPACE_H

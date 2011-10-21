@@ -1,0 +1,37 @@
+
+#ifndef CONTROLS_H
+#define CONTROLS_H
+
+#include "Timer.h"
+#include "EventManager.h"
+
+enum UserAction {NOACTION, PAUSE};
+enum MouseButtonState {UP, DOWN};
+
+class Player;
+
+class Controls {
+	
+public:	
+	
+	Controls();	
+	UserAction checkUserInput(Player *pPlayer, level_status ls);
+	void Look(Player *pPlayer);
+	void Fire(Player *pPlayer);
+	void PauseTimers();
+	void UnpauseTimers();
+
+	bool goForward;
+	bool goBack;
+	bool goLeft;
+	bool goRight;
+	MouseButtonState leftbutton;
+	
+	//automatic fire
+	bool NEW_BURST;
+	Timer automaticFire;
+		
+};
+
+#endif //CONTROLS_H
+

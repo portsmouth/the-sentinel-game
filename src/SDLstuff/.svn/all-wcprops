@@ -1,0 +1,29 @@
+K 25
+svn:wc:ra_dav:version-url
+V 50
+/svn/EncounterX/!svn/ver/4/EncounterX/src/SDLstuff
+END
+SDLMain.m
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/EncounterX/!svn/ver/4/EncounterX/src/SDLstuff/SDLMain.m
+END
+SDLview.h
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/EncounterX/!svn/ver/4/EncounterX/src/SDLstuff/SDLview.h
+END
+SDLMain.h
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/EncounterX/!svn/ver/4/EncounterX/src/SDLstuff/SDLMain.h
+END
+SDLview.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/EncounterX/!svn/ver/4/EncounterX/src/SDLstuff/SDLview.cpp
+END

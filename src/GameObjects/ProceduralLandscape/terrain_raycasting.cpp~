@@ -1,0 +1,154 @@
+
+
+#include "Game.h"
+#include "terrain.h"
+
+
+/********************************************************************************/
+/*                           Terrain raycasting                                 */
+/********************************************************************************/
+
+/*  Raycast against terrain walls and flat squares. Supply 3d ray origin P, and normalized 3d direction D.
+    Returns index into m_squares of nearest square hit, or -1 if no hit 
+*/
+int Terrain::raycast(const Vec4& P, const Vec4& D)
+{
+	Vec4 Z(0,0,1);
+	Vec4 Pproj = P - P[2]*Z;
+	
+	Vec4 Dproj(D[0], D[1], 0);
+	Dproj.normalizeIfNotZero();
+	Vec4 Eproj = Pproj + (1.5f*m_terrainEdgeSize) * Dproj;
+	
+	int grid_start[2], grid_end[2];
+	getSquareOfCoords( Pproj[0], Pproj[1], grid_start );
+	getSquareOfCoords( Eproj[0], Eproj[1], grid_end );
+	
+	// Use Bresenham algorithm to find a thin band of candidate grid squares for height testing 
+	Bresenham( grid_start, grid_end );
+	
+	// Raycast against each square in candidate band
+	float tmin = MAXFLOAT;
+	int squareHit = -1;
+	
+	vector<int>::iterator iter = m_squaresHit.begin();
+	while (iter != m_squaresHit.end())
+	{
+		int squareIndx = *iter;
+		Square& square = m_squares[squareIndx];
+		
+		float t;
+		if ( square.intersect( P, D, &t, m_mesh ) )
+		{
+			if (squareHit == -1)
+			{
+				tmin = t;
+				squareHit = squareIndx;
+			}
+			else
+			{
+				if (t<tmin)
+				{
+					tmin = t;
+					squareHit = squareIndx;
+				}
+			}
+		}
+		
+		++iter;		
+	}
+	
+	return squareHit;
+}
+
+static inline void Swap( int& a, int& b )
+{
+	int c = a;
+    a = b;
+    b = c;
+}
+
+
+void Terrain::Bresenham( int* start, int* end )
+{
+	m_squaresHit.clear();
+	
+	int x0 = start[0];
+	int y0 = start[1];
+	int x1 = end[0];
+	int y1 = end[1];
+	
+    bool steep = abs(y1 - y0) > abs(x1 - x0);
+    if (steep) 
+	{
+        Swap(x0, y0);
+        Swap(x1, y1);
+    }
+    if (x0 > x1) 
+	{
+        Swap(x0, x1);
+        Swap(y0, y1);
+    }
+	
+    int deltax = x1 - x0;
+    int deltay = abs(y1 - y0);
+    int error = 0, ystep;
+    int y = y0;
+    if (y0 < y1) ystep = 1; else ystep = -1;
+    
+	for (int x = x0; x <= x1; x++) 
+	{
+		bool nohit  = (y<0 || y>m_numSquaresPerEdge-1);
+		nohit |= (x<0 || x>m_numSquaresPerEdge-1);
+		
+		if (!nohit)
+		{
+			if (steep) 
+			{
+				m_squaresHit.push_back( getSquareIndx(y,x) );
+			}
+			else 
+			{
+				m_squaresHit.push_back( getSquareIndx(x,y) );
+			}
+		}
+        
+		error += deltay;
+        if (2 * error >= deltax) 
+		{
+            y += ystep;
+            error -= deltax;
+        }
+    }
+	
+	//pad line
+	const int padSize = 1; //if there are accuracy problems, bump this up to 2 
+	int nLine = m_squaresHit.size();
+	
+	for (int n=0; n<nLine; ++n)
+	{
+		int squareIndx = m_squaresHit[n];
+		Square& square = m_squares[squareIndx];
+		
+		int x = square.m_i; 
+		int y = square.m_j; 
+		
+		if (steep) //TO DO: faster to move this test outside loop
+		{
+			for (int p=1; p<=padSize; ++p)
+			{
+				if (x+p < m_numSquaresPerEdge ) m_squaresHit.push_back( getSquareIndx(x+p,y) );
+				if (x-p >= 0)                   m_squaresHit.push_back( getSquareIndx(x-p,y) );
+			}
+		}
+		else
+		{
+			for (int p=1; p<=padSize; ++p)
+			{
+				if (y+p < m_numSquaresPerEdge ) m_squaresHit.push_back( getSquareIndx(x,y+p) );
+				if (y-p >= 0)                   m_squaresHit.push_back( getSquareIndx(x,y-p) );
+			}
+		}
+	}
+}
+

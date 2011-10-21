@@ -1,0 +1,67 @@
+
+#ifndef SKY_H
+#define SKY_H
+
+#include "GameObject.h"
+
+//headers for texture handling
+#include "FileUtils.h"
+#include "Filenames.h"
+#include "TextureLibrary.h"
+#include <string>
+#include <iostream>
+using std::string;
+using std::cout;
+using std::endl;
+
+#define Nstars 150
+#define Nbillboards (1+Nstars)
+
+enum sky_directions
+{
+	SKY_FRONT,
+	SKY_BACK,
+	SKY_LEFT,
+	SKY_RIGHT,
+	SKY_UP,
+	SKY_DOWN
+};
+
+class Sky : public GameObject {
+	
+public:	
+	Sky(); //constructor
+	~Sky(); //destructor
+	void Init();
+	void draw(void);
+	void loadTextures();
+
+	
+private:
+
+	//billboards
+	void billboardSphericalBegin(float camX, float camY, float camZ,
+								 float relobjPosX, float relobjPosY, float relobjPosZ);
+	
+	inline void billboardEnd();
+	
+	float location[Nbillboards][3], azimuth[Nbillboards];
+	float stardir[Nstars][3], sundir[3], tint[3][Nbillboards];
+	float angularsize[Nbillboards], radius[Nbillboards];
+	float billb_vertex[Nbillboards][4][3], billb_texcs[Nbillboards][4][2];
+	float deg_to_rad, rad_to_deg;
+	
+	//skybox
+	double sbox_corners[8][3];
+	int sbox_faces[6][4];
+	double sbox_faces_tx[4][2];
+	double sbox_edge;
+	
+	//textures
+	Texture *mTexture_moon;
+	Texture *mTexture_star1;
+	Texture *mTexture_sky[6];
+};
+
+#endif //SKY_H
+

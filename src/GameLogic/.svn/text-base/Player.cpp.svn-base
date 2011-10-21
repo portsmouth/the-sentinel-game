@@ -1,0 +1,851 @@
+
+
+#include "SDL/SDL.h"
+#include "Player.h"
+#include "SDLview.h"
+#include "Game.h"
+#include "geometry.h"
+
+#define NUM_PLAYER_LIVES 5
+ 
+//time for which respawning/shot indication overlay occurs
+#define PLAYER_RESPAWN_TIME 2.0
+
+//time for which failed indication overlay occurs in hyperspace
+#define PLAYER_RESPAWN_TIME_HS 2.0
+
+//time for which game over overlay appears
+#define GAMEOVER_DELAY 2.0
+
+#define PLAYER_INVULNERABILITY
+
+float ran2(long *idum);
+
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+
+Player::Player(void) //constructor
+{	
+}
+
+Player::~Player() //destructor
+{
+}
+
+/* player and view characteristics */
+void Player::InitObserver()
+{
+	theWorld = Game::getWorld();
+	pHyperspace = Game::getHyperspace();
+	terrain_edge_size = theWorld->terrain->getTerrainEdgeSize();
+	
+	hover_height = 1.3e-2*terrain_edge_size;
+	//hover_height = 1.0e-1*terrain_edge_size;
+
+	zaxis[0] = 0.0; zaxis[1] = 0.0; zaxis[2] = 1.0;
+	
+	initialposition();
+	
+	for (int a=0;a<3;a++) {
+		velocity[a] = 0.0;
+		acceleration[a] = 0.0;
+	}
+	//thrustaccel = 0.45;	
+	thrustaccel = 1.4;	
+
+	sidethrustaccel = 0.5;
+	maxspeed = terrain_edge_size*0.5;
+	damping_factor = 1.0 - 2.0e-2;
+	coeff_restitution = 0.4; //on bouncing off cylinder
+	
+	ViewAtPosition(view_point[0],view_point[1],viewAngle, viewAzimuth, viewHeight);
+	
+	SDLview *theSDLview = Game::getSDLview();
+	int dims[2];
+	theSDLview->getViewDims(dims);
+	view_width = (float)dims[0];
+	view_height = (float)dims[1];
+	aspect_ratio = view_width/view_height;		
+	near = 1.0e-3*terrain_edge_size;
+	far = 20.0*terrain_edge_size;
+	fovy = 60.0;
+	
+	float dropTime = 15*UINT;
+	gravity = hover_height/(dropTime*dropTime);
+	
+	//initial number of lives
+	nLives = NUM_PLAYER_LIVES;
+	state = PLAYER_ACTIVE;
+}
+
+/* player and view characteristics in hyperspace */
+void Player::InitObserver_HS()
+{
+	thrustaccel = 0.8;	
+	sidethrustaccel = 0.4;
+	maxspeed = 0.5;
+	damping_factor = 1.0 - 2.0e-2;
+	coeff_restitution = 0.5; //on bouncing off cylinder
+		
+	terrain_edge_size = pHyperspace->terrain->getTerrainEdgeSize();
+	initialposition_HS();
+	
+	hover_height = 0.13e-2*terrain_edge_size;
+		
+	ViewAtPosition_HS(view_point[0],view_point[1],viewAngle, viewAzimuth);
+	
+	SDLview *theSDLview = Game::getSDLview();
+	int dims[2];
+	theSDLview->getViewDims(dims);
+	view_width = (float)dims[0];
+	view_height = (float)dims[1];
+	aspect_ratio = view_width/view_height;		
+	near = 1.0e-3*terrain_edge_size;
+	far = 20.0*terrain_edge_size;
+	fovy = 60.0;
+}
+
+void Player::resetScore()
+{
+	Score = 0;
+}
+
+void Player::addScore(int points)
+{
+	Score += points;
+}
+
+
+/* choose a random initial player position which does not lie inside a cylinder or 
+   the enemy (whose initial position should already have been set) */
+void Player::initialposition()
+{
+	float *enemypos = theWorld->enemy.position;
+	float enemyrad = theWorld->enemy.radius;
+	
+	static long seed = -50;
+	bool enemytouch;
+	//bool cyltouch;
+	Cylinder *pCyl;
+	do 
+	{
+		view_point[0] = ran2(&seed)*terrain_edge_size;
+		view_point[1] = ran2(&seed)*terrain_edge_size;
+		pCyl = theWorld->TestCollision_PlayerCylinder(view_point);
+		enemytouch = ( SQR(enemypos[0]-view_point[0]) + SQR(enemypos[1]-view_point[1]) 
+					   < 1.5*enemyrad );
+	} while ((pCyl != NULL) || enemytouch);
+	
+	viewAngle = 2.0*M_PI*ran2(&seed);
+	viewAzimuth = 0.0;
+	
+	viewHeight = theWorld->terrain->height(view_point[0],view_point[1]) + hover_height;
+}
+
+/* choose a random initial player position in hyperspace which does not lie inside a cylinder */
+//TO DO: player must lie a quite large distance from any cylinder to avoid immediate collision
+void Player::initialposition_HS()
+{
+	static long seed = -40;
+	//bool cyltouch;
+	Cylinder *pCyl;
+	do 
+	{
+		view_point[0] = ran2(&seed)*terrain_edge_size;
+		view_point[1] = ran2(&seed)*terrain_edge_size;
+		pCyl = pHyperspace->TestCollision_PlayerCylinder(view_point);
+	} while (pCyl != NULL);
+	
+	viewAngle = 2.0*M_PI*ran2(&seed);
+	viewAzimuth = 0.0;
+}
+
+void Player::ViewAtPosition(float x, float y, float angle, float azimuth, float height)
+{			
+	//view_point[2] = theWorld->terrain->height(x,y) + hover_height;
+	view_point[2] = height;
+	view_plane[0] = cos(angle);
+	view_plane[1] = sin(angle);
+	
+	float halfPI = 0.5*M_PI;
+	view_dir[0] = view_plane[0]*sin(halfPI-azimuth);
+	view_dir[1] = view_plane[1]*sin(halfPI-azimuth);
+	view_dir[2] = cos(halfPI-azimuth);
+		
+	float local_normal[3];
+	theWorld->terrain->getLocalNormal(local_normal,x,y);	
+
+	for (int a=0;a<3;a++) {
+		localy[a] = zaxis[a];
+	}
+	dirCosine = scalarprod(local_normal,zaxis);
+	normcrossprod(view_dir,local_normal,localx);
+}
+
+void Player::ViewAtPosition_HS(float x, float y, float angle, float azimuth)
+{			
+	view_point[2] = pHyperspace->terrain->height(x,y) + hover_height;
+	
+	view_plane[0] = cos(angle);
+	view_plane[1] = sin(angle);
+	
+	float halfPI = 0.5*M_PI;
+	view_dir[0] = view_plane[0]*sin(halfPI-azimuth);
+	view_dir[1] = view_plane[1]*sin(halfPI-azimuth);
+	view_dir[2] = cos(halfPI-azimuth);
+	
+	float local_normal[3];
+	pHyperspace->terrain->getLocalNormal(local_normal,x,y);	
+	
+	for (int a=0;a<3;a++) {
+		localy[a] = zaxis[a];
+	}
+	dirCosine = scalarprod(local_normal,zaxis);
+	normcrossprod(view_dir,local_normal,localx);
+}
+
+
+void Player::RotateAboutVertical(float dAngle)
+{
+	viewAngle += dAngle;
+	if (viewAngle>2.0*M_PI) {
+		viewAngle -= 2.0*M_PI;
+	}	
+	else if (viewAngle<0.0) {
+		viewAngle += 2.0*M_PI;
+	}		
+}
+
+void Player::RotateAboutHorizontal(float dAzimuth)
+{
+	float avoid_cone = 1.0e-3; //cone of avoidance of up and down poles, in rad
+	
+	viewAzimuth += dAzimuth;
+	if (viewAzimuth>0.5*M_PI-avoid_cone) {
+		viewAzimuth = 0.5*M_PI - avoid_cone;
+	}	
+	else if (viewAzimuth<-0.5*M_PI+avoid_cone) {
+		viewAzimuth = -0.5*M_PI + avoid_cone;
+	}		
+}
+/*************************************************************/
+/*                        move player                        */
+/*************************************************************/
+
+
+void Player::ApplyTerrainContactForce( float* candidate_v, float dv )
+{
+	float contactZone =  theWorld->terrain->height(view_point[0],view_point[1]) + 1.2f*hover_height;
+	if ( view_point[2] <  contactZone )
+	{
+		float vertCosine = scalarprod(view_dir,zaxis);
+		candidate_v[2] = velocity[2] + vertCosine*dv;
+	}
+}
+
+void Player::GoForward()
+{
+	float candidate_v[3];
+	float dv = thrustaccel*UINT;
+		
+	for (int a=0;a<3;a++)
+	{
+		candidate_v[a] = velocity[a];
+	}
+	
+	for (int a=0;a<2;a++) {		
+		candidate_v[a] = velocity[a] + dv*dirCosine*view_plane[a];		
+	}
+	
+	ApplyTerrainContactForce(candidate_v, dv);
+		
+	float speed = magnitude2d(candidate_v);
+	if (speed<maxspeed) {
+		for (int a=0;a<3;a++) {		
+			velocity[a] = candidate_v[a];	
+		}
+	}		
+}
+
+void Player::GoBackward()
+{	
+	float candidate_v[3];
+	float dv = -thrustaccel*UINT;
+	
+	for (int a=0;a<3;a++)
+	{
+		candidate_v[a] = velocity[a];
+	}
+	
+	for (int a=0;a<2;a++) {		
+		candidate_v[a] = velocity[a] + dv*dirCosine*view_plane[a];		
+	}
+	
+	ApplyTerrainContactForce(candidate_v, dv);
+	
+	float speed = magnitude2d(candidate_v);
+	if (speed<maxspeed) {
+		for (int a=0;a<2;a++) {		
+			velocity[a] = candidate_v[a];		
+		}
+	}		
+}
+
+void Player::GoLeft()
+{	
+	float candidate_v[3];
+	float dv = -sidethrustaccel*UINT;
+	
+	for (int a=0;a<3;a++)
+	{
+		candidate_v[a] = velocity[a];
+	}
+	
+	for (int a=0;a<2;a++)
+		candidate_v[a] = velocity[a] + dv*localx[a];		
+	
+	ApplyTerrainContactForce(candidate_v, dv);
+	
+	float speed = magnitude2d(candidate_v);
+	if (speed<maxspeed)
+		for (int a=0;a<2;a++)
+			velocity[a] = candidate_v[a];		
+}
+
+void Player::GoRight()
+{
+	float candidate_v[3];
+	float dv = sidethrustaccel*UINT;
+	
+	for (int a=0;a<3;a++)
+	{
+		candidate_v[a] = velocity[a];
+	}
+	
+	for (int a=0;a<2;a++) 
+	{		
+		candidate_v[a] = velocity[a] + dv*localx[a];		
+	}
+	
+	ApplyTerrainContactForce(candidate_v, dv);
+	
+	float speed = magnitude2d(candidate_v);
+	if (speed<maxspeed) 
+	{
+		for (int a=0;a<2;a++) 
+		{		
+			velocity[a] = candidate_v[a];		
+		}
+	}			
+}
+
+void Player::Move()
+{
+	float candidate_point[3];
+	for (int a=0;a<3;a++) 
+	{		
+		candidate_point[a] = view_point[a] + velocity[a]*UINT;	
+	}	
+	for (int a=0;a<3;a++) 
+	{		
+		velocity[a] *= damping_factor;	
+	}	
+	
+	velocity[2] -= gravity*UINT;
+	
+	WrapDomain(candidate_point);
+	AttemptToMove(candidate_point);	
+}
+
+void Player::AttemptToMove(float *candidate_point)
+{
+	bool error_detect = false;
+	
+	//see if there is a collision at candidate position or not
+	Cylinder* pCyl = theWorld->TestCollision_PlayerCylinder(candidate_point);
+	
+	//if not, move to candidate position
+	if (!pCyl) 
+	{		
+		for (int a=0;a<3;a++) 
+			view_point[a] = candidate_point[a];
+	}
+	
+	//if there is a collision with a cylinder, move player to point where he touches cylinder,
+	//and set velocity to the velocity after an elastic bounce
+	else 
+	{	
+		
+		//A collision occurred with cylinder pointed to by pCyl.				
+		//find position of the cylinder
+		float *cylpos = pCyl->position;
+		
+		//given current position of player and cylinder, and player velocity
+		//find velocity of player after elastic bounce
+		
+		float A,B,L;	
+		//compute A
+		float *vnorm = new float[2];
+		memcpy(vnorm,velocity,2*sizeof(float));
+		normalize2d(vnorm);				
+		float cyldist[2];
+		for (int a=0;a<2;a++) 
+			cyldist[a] = cylpos[a] - view_point[a];
+		A = scalarprod2d(vnorm,cyldist);
+		
+		//compute B;
+		float cyldist_sqrmag = scalarprod2d(cyldist,cyldist);		
+		float cylinder_radius = pCyl->getRadius();
+		B = cyldist_sqrmag - SQR(cylinder_radius);
+		
+		if (B<0.0) 
+		{
+			//whoops! current player position is inside cylinder
+			printf("error: failed to detect player-cylinder collision\n");
+			error_detect = true;
+		}
+		
+		//compute L
+		double discr = (double)(SQR(A) - SQR(B));
+		
+		if (discr<0.0) 
+		{
+			//player misses cylinder - should not occur since at candidate position 
+			//player  was found to collide with cylinder.
+			printf("error: spurious player-cylinder collision\n");
+			error_detect = true;
+		}
+		else {
+			L = A - (float)sqrt(discr);
+		}
+		
+		if(!error_detect) 
+		{			
+			
+			//move player to touch boundary of cylinder
+			for (int a=0;a<2;a++) 
+				view_point[a] += L*vnorm[a];
+			
+			//construct vector passing through the player and cylinder center
+			float reflect[2];
+			for (int a=0;a<2;a++) 
+				reflect[a] = view_point[a] - cylpos[a];
+			
+			normalize2d(reflect);			
+			//set reflected player velocity
+			float vpara[2], vperp[2];
+			float vpara_mag = scalarprod2d(velocity,reflect);
+			for (int a=0;a<2;a++) {
+				vpara[a] = vpara_mag*reflect[a];
+				vperp[a] = velocity[a] - vpara[a];
+			}
+			for (int a=0;a<2;a++) 
+				velocity[a] = coeff_restitution*(vperp[a] - vpara[a]);
+			
+			//play a sound indicating player reflected off cylinder
+			Sound *soundplayer = Game::getSound();
+			float soundvolume = soundplayer->ComputeSoundVolume(view_point);
+			soundvolume *= magnitude2d(velocity)/maxspeed; //so volume scales with player speed
+			soundplayer->PlayGeneralSound(PlayerFire,soundvolume);
+			
+		}
+		
+		delete [] vnorm;
+	}
+	
+	if(error_detect) 
+	{			
+		//if there was an error while detecting collision, just stop player,
+		//thus avoiding disaster
+		for (int a=0;a<2;a++) 
+			velocity[a] = 0.0;
+	}
+	
+	float terrainHeight =  theWorld->terrain->height(view_point[0],view_point[1]) + hover_height;
+	if ( view_point[2] <  terrainHeight )
+	{
+		view_point[2] = terrainHeight;
+		velocity[2] = 0.0f;
+	}
+	
+	//wrap position into central domain
+	WrapDomain(view_point);
+	
+}
+
+
+/*************************************************************/
+/*              move player through Hyperspace               */
+/*************************************************************/
+
+void Player::GoForward_HS()
+{
+	float candidate_v[2];
+	float dv = thrustaccel*UINT;
+	velocity[2] = 0.0;
+	
+	for (int a=0;a<2;a++) 	
+		candidate_v[a] = velocity[a] + dv*view_plane[a];		
+	
+	float speed = magnitude2d(candidate_v);
+	if (speed<maxspeed) 
+		for (int a=0;a<2;a++) 		
+			velocity[a] = candidate_v[a];		
+}
+
+void Player::GoLeft_HS()
+{	
+	float candidate_v[2];
+	float dv = -sidethrustaccel*UINT;
+	
+	for (int a=0;a<2;a++)
+		candidate_v[a] = velocity[a] + dv*localx[a];		
+	
+	float speed = magnitude2d(candidate_v);
+	if (speed<maxspeed)
+		for (int a=0;a<2;a++)
+			velocity[a] = candidate_v[a];		
+}
+
+void Player::GoRight_HS()
+{
+	float candidate_v[2];
+	float dv = sidethrustaccel*UINT;
+	
+	for (int a=0;a<2;a++) 
+	{		
+		candidate_v[a] = velocity[a] + dv*localx[a];		
+	}
+	
+	float speed = magnitude2d(candidate_v);
+	if (speed<maxspeed) 
+	{
+		for (int a=0;a<2;a++) 
+		{		
+			velocity[a] = candidate_v[a];		
+		}
+	}			
+}
+
+bool Player::Move_HS()
+{
+	float candidate_point[2];
+	for (int a=0;a<2;a++) 
+	{		
+		candidate_point[a] = view_point[a] + velocity[a]*UINT;	
+	}	
+	for (int a=0;a<2;a++) 
+	{		
+		velocity[a] *= damping_factor;	
+	}	
+	WrapDomain(candidate_point);
+	return AttemptToMove_HS(candidate_point);	
+}
+
+bool Player::AttemptToMove_HS(float *candidate_point)
+{
+	bool error_detect = false;
+	bool killed = false;
+	
+	//see if there is a collision at candidate position or not
+	Cylinder* pCyl = pHyperspace->TestCollision_PlayerCylinder(candidate_point);
+	
+	//if not, move to candidate position
+	if (!pCyl) 
+	{		
+		for (int a=0;a<2;a++) 
+		{
+			view_point[a] = candidate_point[a];
+		}				
+	}
+	
+	//if there is a collision with a cylinder, move player to point where he touches cylinder,
+	//and set velocity to the velocity after an elastic bounce
+	else {	
+		
+		killed = true;
+		
+		//A collision occurred with cylinder pointed to by pCyl.				
+		//find position of the cylinder
+		float *cylpos = pCyl->position;
+		
+		//given current position of player and cylinder, and player velocity
+		//find velocity of player after elastic bounce
+		
+		float A,B,L;	
+		//compute A
+		float *vnorm = new float[2];
+		memcpy(vnorm,velocity,2*sizeof(float));
+		normalize2d(vnorm);				
+		float cyldist[2];
+		for (int a=0;a<2;a++) 
+			cyldist[a] = cylpos[a] - view_point[a];
+		A = scalarprod2d(vnorm,cyldist);
+		
+		//compute B;
+		float cyldist_sqrmag = scalarprod2d(cyldist,cyldist);		
+		float cylinder_radius = pCyl->getRadius();
+		B = cyldist_sqrmag - SQR(cylinder_radius);
+		
+		if (B<0.0) {
+			//whoops! current player position is inside cylinder
+			printf("error: failed to detect player-cylinder collision\n");
+			error_detect = true;
+		}
+		
+		//compute L
+		double discr = (double)(SQR(A) - SQR(B));
+		
+		if (discr<0.0) {
+			//player misses cylinder - should not occur since at candidate position 
+			//player  was found to collide with cylinder.
+			printf("error: spurious player-cylinder collision\n");
+			error_detect = true;
+		}
+		else {
+			L = A - (float)sqrt(discr);
+		}
+		
+		if(!error_detect) {			
+			
+			//move player to touch boundary of cylinder
+			for (int a=0;a<2;a++) 
+				view_point[a] += L*vnorm[a];
+			
+			//construct vector passing through the player and cylinder center
+			float reflect[2];
+			for (int a=0;a<2;a++) 
+				reflect[a] = view_point[a] - cylpos[a];
+			
+			normalize2d(reflect);			
+			//set reflected player velocity
+			float vpara[2], vperp[2];
+			float vpara_mag = scalarprod2d(velocity,reflect);
+			for (int a=0;a<2;a++) {
+				vpara[a] = vpara_mag*reflect[a];
+				vperp[a] = velocity[a] - vpara[a];
+			}
+			for (int a=0;a<2;a++) 
+				velocity[a] = coeff_restitution*(vperp[a] - vpara[a]);
+			
+			//play a sound indicating player reflected off cylinder
+			Sound *soundplayer = Game::getSound();
+			float soundvolume = soundplayer->ComputeSoundVolume(view_point);
+			soundvolume *= magnitude2d(velocity)/maxspeed; //so volume scales with player speed
+			soundplayer->PlayGeneralSound(PlayerFire,soundvolume);
+			
+		}
+		
+		delete [] vnorm;
+	}
+	
+	if(error_detect) {			
+		//if there was an error while detecting collision, just stop player,
+		//thus avoiding disaster
+		for (int a=0;a<2;a++) 
+			velocity[a] = 0.0;
+	}
+	
+	//wrap position into central domain
+	WrapDomain(view_point);
+	
+	return killed;	
+}
+
+/*************************************************************/
+/*                            misc                           */
+/*************************************************************/
+
+void Player::WrapDomain(float *point2d)
+{
+	for (int a=0;a<2;a++) 
+	{
+		if (point2d[a]>terrain_edge_size) 
+		{
+			point2d[a] -= terrain_edge_size;
+		}
+		else if (point2d[a]<0.0) 
+		{
+			point2d[a] += terrain_edge_size;
+		}		
+	}
+}
+
+/* in-level observer setup */
+void Player::SetObserverProjection(void)
+{			
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	gluPerspective(fovy,aspect_ratio,near,far);		
+	
+	ViewAtPosition(view_point[0],view_point[1],viewAngle,viewAzimuth,view_point[2]);
+	lookat();
+}
+
+/* in-hyperspace observer setup */
+void Player::SetObserverProjection_HS()
+{			
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	gluPerspective(fovy,aspect_ratio,near,far);		
+	
+	ViewAtPosition_HS(view_point[0],view_point[1],viewAngle,viewAzimuth);	
+	lookat();
+}
+
+void Player::lookat()
+{
+	float ray[3];
+	for (int a=0;a<3;a++) 
+		ray[a] = view_point[a] + 0.1*terrain_edge_size*view_dir[a];
+	
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	gluLookAt(view_point[0], view_point[1], view_point[2],
+			  ray[0],        ray[1],        ray[2],
+			  localy[0],     localy[1],     localy[2]);	
+}
+
+float* Player::GetViewDirection()
+{
+	return view_dir;
+}
+float* Player::GetViewPoint()
+{
+	return view_point;
+}
+void Player::GetViewAngles(float *angle, float *azimuth)
+{
+	*angle = viewAngle;
+	*azimuth = viewAzimuth;
+}
+float Player::GetFovy()
+{
+	return fovy;
+}
+
+int Player::GetLives()
+{
+	return nLives;
+}
+
+int Player::GetScore()
+{
+	return Score;
+}
+
+float Player::GetHoverHeight()
+{
+	return hover_height;
+}
+
+float* Player::GetVelocity()
+{
+	return velocity;
+}
+
+void Player::PauseTimers()
+{
+	deathTimer.pause();
+	shotTimer.pause();
+	firedTimer.pause();
+	
+	deathTimer_HS.pause();
+	shotTimer_HS.pause();
+}
+
+void Player::UnpauseTimers()
+{
+	deathTimer.unpause();
+	shotTimer.unpause();
+	firedTimer.unpause();
+	
+	deathTimer_HS.unpause();
+	shotTimer_HS.unpause();
+}
+
+bool Player::TestCollisionBullet(float *candidate_point, float bulletRadius)
+{
+	float sqrdist = 0.0;
+	for(int a=0;a<2;a++) 
+		sqrdist += SQR(candidate_point[a]-view_point[a]); 
+	return (sqrdist<=SQR(bulletRadius));
+}
+
+
+void Player::SetState(Player_States newState)
+{
+	state = (Player_States)newState;
+}
+
+ Player_States Player::GetState()
+{
+	return (Player_States)state;
+}
+
+/* player is killed in-level */
+void Player::kill()
+{
+	
+#ifdef PLAYER_INVULNERABILITY
+	return;
+#endif //PLAYER_INVULNERABILITY
+	
+	if (state==PLAYER_ACTIVE) { //you can't shoot me if I'm respawning or waiting for game-over...
+
+		state = PLAYER_RESPAWNING;
+		shotTimer.start();
+
+		if (nLives-1==0) 
+		{
+			--nLives;
+			state = PLAYER_KILLED;
+			deathTimer.start();		
+		}
+		
+	}
+}
+
+bool Player::TrytoRespawn()
+{
+	bool success = (shotTimer.time()>PLAYER_RESPAWN_TIME);
+	if (success) {
+		--nLives;
+		state = PLAYER_ACTIVE;
+		initialposition();
+	}
+	return success;
+}
+
+bool Player::FinishedDying()
+{
+	return (deathTimer.time()>GAMEOVER_DELAY);
+}
+
+/* player is killed in hyperspace */
+void Player::kill_HS()
+{
+	if (state==PLAYER_HS_ACTIVE)
+	{
+		state = PLAYER_HS_FAILED;
+		shotTimer_HS.start();
+		if (nLives>1) --nLives;
+	}		 
+}
+
+
+bool Player::FinishedFailingHS()
+{
+	bool success = (shotTimer_HS.time()>PLAYER_RESPAWN_TIME_HS);
+	if (success) 
+	{
+		state = PLAYER_ACTIVE;
+		initialposition();
+	}
+	return success;
+}
+
+
+

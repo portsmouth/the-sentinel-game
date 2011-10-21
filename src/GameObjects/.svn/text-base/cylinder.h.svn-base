@@ -1,0 +1,83 @@
+
+
+#ifndef CYLINDER_H
+#define CYLINDER_H
+
+#include "world.h"
+#include "GameObject.h"
+
+//headers for texture handling
+#include "FileUtils.h"
+#include "Filenames.h"
+#include "TextureLibrary.h"
+#include <string>
+#include <iostream>
+using std::string;
+using std::cout;
+using std::endl;
+
+class Terrain;
+
+class Cylinder : public GameObject {
+	
+public:	
+	Cylinder(float cyl_posx, 
+			 float cyl_posy, 
+			 float cyl_radius,
+			 float cyl_height,
+			 int cyl_max_lod, int cyl_min_lod,
+			 string inTextureName,
+			 Terrain* localterrain);	//constructor
+	~Cylinder(); //destructor
+	
+	void draw(void);
+	void getCollisiongridIndices(unsigned int *n, unsigned int *m);
+	float getRadius();
+	float* GetPosition();
+	float position[3], height, radius;
+	
+	bool TestCollisionPoint(float *candidate_point);
+	bool TestCollisionRayInterval(float *x1, float *x2);
+	bool TestCollisionPlayer(float *candidate_point);
+	bool TestCollisionPortal(float *candidate_point, float portal_length);
+	bool TestCollisionBullet(float *candidate_point, float bulletRadius);
+	bool TestCollisionEnemy(float *candidate_point, float enemyRadius);
+
+private:
+	void constructFlute();
+	float fluteshape(float x);
+	inline bool cull(float *point, float *view_point, float *view_dir);
+	int getLOD(float *view_point);
+	float sqrdistance(float *p1, float *p2);
+	float **mirror;
+	float midpnt;
+	int middle;
+	int MIN_LOD, MAX_LOD;
+	float terrain_edge_size;
+	int N_regions;
+	float culldistance;
+	
+	float no_emission[4];
+	float color[3];		
+	float flute_size;
+	float inner_rad;
+		
+	Terrain *terrain;
+	
+	//flute
+	void drawFlute(float *pos, int lod);
+	float lip, lipheight;
+	int Nlayers;
+	float ***mergevertex, ***mergenormal;
+	float ***mergevertex_x, ***mergevertex_y, ***mergevertex_z;
+	float ***mergenormal_x, ***mergenormal_y, ***mergenormal_z;
+	float ***vcoord;
+		
+	/* texturing */
+	Texture *mTexture;
+	float cylinder_texture_cover_z, cylinder_texture_cover_x;
+
+};
+
+#endif //CYLINDER_H
+

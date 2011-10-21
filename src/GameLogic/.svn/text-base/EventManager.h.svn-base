@@ -1,0 +1,37 @@
+
+
+
+#ifndef EVENTMANAGER_H
+#define EVENTMANAGER_H
+
+#include "Enemy.h"
+#include "Player.h"
+
+
+enum level_status {LEVEL_INPROGRESS, LEVEL_GAMEOVER, LEVEL_HYPERSPACE, LEVEL_ADVANCE};
+enum playerInPortal {PIP_INWHILEOPEN, PIP_OUT};
+
+class EventManager {
+	
+public:	
+	EventManager(); //constructor
+	~EventManager(); //destructor	
+	void setup();
+	void doActive(Player_States *ps, Enemy_States *es, level_status *ls);
+	
+private:
+	void dealWithPlayer(Player_States *ps, level_status *ls);
+	void dealWithEnemy(Enemy_States *es, level_status *ls);
+	void dealWithPlayerBullets();
+	void dealWithEnemyBullets();
+	World *pWorld;
+	Enemy *pEnemy;
+	Player *pPlayer;
+	
+	playerInPortal pIp;
+		
+	float PLAYER_BULLET_LIFETIME, ENEMY_BULLET_LIFETIME;
+
+};
+
+#endif //EVENTMANAGER_H

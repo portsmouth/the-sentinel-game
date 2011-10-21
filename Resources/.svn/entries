@@ -1,0 +1,37 @@
+8
+
+dir
+5
+http://tools.assembla.com/svn/EncounterX/EncounterX/Resources
+http://tools.assembla.com/svn/EncounterX
+
+
+
+2007-02-24T20:06:55.875431Z
+4
+jamiep
+
+
+svn:special svn:externals svn:needs-lock
+
+
+
+
+
+
+
+
+
+
+
+69705d57-3e2a-0410-838b-b0ec750df656
+
+EncounterX_soundeffects
+dir
+
+Textures
+dir
+
+Sounds
+dir
+

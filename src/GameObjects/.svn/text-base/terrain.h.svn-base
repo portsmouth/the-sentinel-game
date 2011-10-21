@@ -1,0 +1,156 @@
+
+
+#ifndef TERRAIN_H
+#define TERRAIN_H
+
+#include "GameObject.h"
+#include "SDL/SDL.h"
+#include "geometry.h"
+
+//headers for texture handling
+#include "FileUtils.h"
+#include "Filenames.h"
+#include "TextureLibrary.h"
+#include <string>
+#include <iostream>
+using std::string;
+using std::cout;
+using std::endl;
+
+#define MAX_N_LOD_levels 5
+
+//keeps track of whether sub-cell is on border of base cell or interior, and which border
+enum border_positions { bl, br, tr, tl, l, r, t, b, INSIDE };
+enum cardinals {L, R, T, B};
+
+typedef struct meshtriangle {
+	float v[3][3], t[3][2], n[3][3];
+	float meanv[3];
+} meshtriangle;
+
+typedef struct LODcell *celllink;
+typedef struct LODcell {
+	celllink next;
+	float v[4][3], t[4][2], X[2], Y[2];
+	float ih[4]; //interpolated heights for the 4 vertices which match next lowest LOD
+	int cell_pos; //which sub-cell of the parent cell is this, either 0,1,2,3
+	int myLOD;
+	enum border_positions B;
+	//triangles with true terrain height (non-interpolated)
+	meshtriangle t1, t2; 
+	//triangles which match across a LOD boundary	
+	meshtriangle t1_match, t2_match;
+	meshtriangle t1_match_c1, t2_match_c1; 
+	meshtriangle t1_match_c2, t2_match_c2; 
+	meshtriangle t1_match_c3, t2_match_c3; 	
+} LODcell;
+
+
+class Fouriermap;
+
+class Terrain : public GameObject {
+	
+public:	
+	
+	Terrain(const int ngrid, 
+			const int nlodcells, 
+			const int nregions,
+			const int nlodlevels,
+			const int seed,
+			const float terrain_edge_size,
+			const float terrain_texture_cover,
+			const float Amp,
+			const float Np,
+			const int ktrunc);
+	
+	~Terrain(); 
+	
+	void draw(void);
+	
+	float getTerrainEdgeSize();
+	
+	float height(float x, float y);
+	
+	void getLocalNormal(float *normal, float x, float y);
+	
+	void SetTexture(string inTextureName);
+	
+	void modify_material(float alpha);
+	
+	int getNregions();
+
+private:
+	
+	void constructmesh();	
+	
+	void generateBaseLODCell(int i, int j, celllink *clp);
+	
+	void makeLODcell(celllink cell, float **verts, float **texcs,
+					 float *interp_heights, int LOD, int cellpos, int borderpos);
+	
+	void addCelltoList(celllink *clp, celllink newcell_ptr);
+	
+	void refineCell(celllink cell, celllink newcells);
+	
+	void generateRefinedLODCell(celllink parent, celllink *child);
+	
+	void placeedge(float *ve, int **ev, LODcell *cell);
+	
+	void findCellBorders(border_positions *Bc, border_positions Bp);
+	
+	int getLOD(float cx, float cy, float *view_point);
+	
+	void getLODneighbours(int i, int j, int *neigh_i, int *neigh_j);
+	
+	void wrapDomain(float *original, float *wrapped);
+	
+	inline bool cull(float *point, float *view_point, float *view_dir);
+	
+	celllink** celllink_matrix(long ilr, long ihr, long ilc, long ihc);
+	
+	void free_LODcells();
+	
+	void free_celllinkmatrix(celllink **m, long ilr, long ihr, long ilc, long ihc);
+	
+	//initialized in constructor 
+	const int mNgrid, mN_LOD_Cells, mN_regions, mN_LOD_levels, mSeed;
+	const float mTerrain_edge_size, mTerrain_texture_cover, mAmp, mNp;		
+	const int mKtrunc;
+	
+	//misc pointers
+	float **Heightmap;
+	Fouriermap* fouriermap;
+	celllink **LOD_Cells[MAX_N_LOD_levels]; //2d-arrays of pointers into linked lists containing LODcells	
+	int **LODlevels;
+	float **vd1, *td1[3], *nd1[3], meanv1[3];
+	float **vd2, *td2[3], *nd2[3], meanv2[3];
+	float **vd1_match, *td1_match[3], *nd1_match[3], meanv1_match[3];
+	float **vd2_match, *td2_match[3], *nd2_match[3], meanv2_match[3];
+	float **verts_temp, **vnew_temp;
+	float **texcs_temp, **tnew_temp;
+	int **ev_temp;
+		
+	int neigh_i[4], neigh_j[4];
+	bool match_cardinal[4], matching;
+	enum cardinals card;						
+	meshtriangle *pt1, *pt2;
+	bool MATCH;
+	bool cullvertex[3], cansee1, cansee2;				
+	float dl_terrain, dl_cell;	
+	float deg_to_rad;
+	
+	/* texturing */
+	Texture *mTexture;
+	float terrain_texture_cover;
+	float no_emission[4];
+	
+	float specular_modif[4];
+	float diffuse_modif[4];
+	float ambient_modif[4];
+	float emission_modif[4];
+		
+
+};
+
+#endif //TERRAIN_H
+

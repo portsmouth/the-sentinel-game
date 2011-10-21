@@ -1,0 +1,47 @@
+
+#ifndef HUD_H
+#define HUD_H
+
+#include "SDL/SDL.h"
+#include "Timer.h"
+
+//headers for texture handling
+#include "FileUtils.h"
+#include "Filenames.h"
+#include "TextureLibrary.h"
+#include <string>
+#include <iostream>
+using std::string;
+using std::cout;
+using std::endl;
+
+enum sl_name {RED_SL, GREEN_SL, BLUE_SL};
+enum sl_state {SL_OFF, SL_ON, SL_PULSE, SL_FLASHING};
+
+class HUD {
+	
+public:	
+	HUD(); //constructor
+	~HUD(); //destructor
+	void init();
+	void display();
+	void SetTextures();
+	void setLight(sl_name sl, sl_state state);
+	void PauseTimers();
+	void UnpauseTimers();
+	
+private:
+	/* texturing */
+	Texture *mTexture_scanner;
+	Texture *mTexture_scannerTL_light;
+	Texture *mTexture_scannerBL_light;
+	Texture *mTexture_scannerdot;
+	Texture *mTexture_banner;
+	
+	float slAlpha[3];   //scanner light alpha values
+	sl_state slState[3];
+	Timer slTimer[3];   //timers to turn lights on and off gradually
+			
+};
+
+#endif //HUD_H

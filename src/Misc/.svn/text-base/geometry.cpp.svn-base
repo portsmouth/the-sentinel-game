@@ -1,0 +1,260 @@
+
+#include "geometry.h"
+
+/* precomputable stuff which will be used at runtime by geometry routines */
+
+/* cylinder trig lookup tables */
+float *sa, *ca;
+float *sa_HS, *ca_HS;
+
+
+void gen_cylinder_lookup_tables( int min_lod, int max_lod )
+{
+	sa = fvector( 0, max_lod - min_lod );
+	ca = fvector( 0, max_lod - min_lod );
+	
+	int l,n,lod;
+	float a;
+	
+	for (l = 0; l<=max_lod-min_lod; ++l) 
+	{	
+		lod = l+min_lod;
+		n = 4*lod;
+		a = (float)M_PI*2.0/(float)n;
+		sa[l] = (float) sin(a);
+		ca[l] = (float) cos(a);		
+	}
+}
+
+void gen_cylinder_lookup_tables_HS(int min_lod, int max_lod)
+{
+	sa_HS = fvector(0, max_lod-min_lod);
+	ca_HS = fvector(0, max_lod-min_lod);
+	
+	int l,n,lod;
+	float a;
+	
+	for (l = 0; l<=max_lod-min_lod; ++l) 
+	{	
+		lod = l+min_lod;
+		n = 4*lod;
+		a = (float)M_PI*2.0/(float)n;
+		sa[l] = (float) sin(a);
+		ca[l] = (float) cos(a);		
+	}
+}
+
+
+void free_cylinder_lookup_tables(int min_lod, int max_lod)
+{
+	free_fvector(sa,0,max_lod-min_lod);
+	free_fvector(ca,0,max_lod-min_lod);
+}
+void free_cylinder_lookup_tables_HS(int min_lod, int max_lod)
+{
+	free_fvector(sa_HS,0,max_lod-min_lod);
+	free_fvector(ca_HS,0,max_lod-min_lod);
+}
+
+
+
+/**********************************************************************/
+/*                          draw routines                             */
+/**********************************************************************/
+
+void drawtriangle(float *v[], float *n[], float *t[])
+{	
+	glNormal3fv(n[0]);		
+	glTexCoord2f(t[0][0], t[0][1] );
+	glVertex3fv(v[0]);
+	
+	glNormal3fv(n[1]);		
+	glTexCoord2f(t[1][0], t[1][1]);
+	glVertex3fv(v[1]);
+	
+	glNormal3fv(n[2]);		
+	glTexCoord2f(t[2][0], t[2][1]);
+	glVertex3fv(v[2]);	
+}
+
+/* --------- */
+
+// sphere.c
+// Draws a lit, textured sphere
+// Richard S. Wright Jr.
+// OpenGL SuperBible
+// 
+// For best results, put this in a display list
+// Draw a sphere at the origin
+void gltDrawSphere(GLfloat *pos, GLfloat fRadius, GLint iSlices, GLint iStacks)
+{
+    GLfloat drho = (GLfloat)(3.141592653589) / (GLfloat) iStacks;
+    GLfloat dtheta = 2.0f * (GLfloat)(3.141592653589) / (GLfloat) iSlices;
+	GLfloat ds = 1.0f / (GLfloat) iSlices;
+	GLfloat dt = 1.0f / (GLfloat) iStacks;
+	GLfloat t = 1.0f;	
+	GLfloat s = 0.0f;
+    GLint i, j;     // Looping variables
+	
+	glShadeModel (GL_SMOOTH);
+	
+	glPushMatrix();
+	glTranslatef(pos[0],pos[1],pos[2]);
+	
+	for (i = 0; i < iStacks; i++) 
+	{
+		GLfloat rho = (GLfloat)i * drho;
+		GLfloat srho = (GLfloat)(sin(rho));
+		GLfloat crho = (GLfloat)(cos(rho));
+		GLfloat srhodrho = (GLfloat)(sin(rho + drho));
+		GLfloat crhodrho = (GLfloat)(cos(rho + drho));
+		
+        // Many sources of OpenGL sphere drawing code uses a triangle fan
+        // for the caps of the sphere. This however introduces texturing 
+        // artifacts at the poles on some OpenGL implementations
+		glBegin(GL_TRIANGLE_STRIP);
+        s = 0.0f;
+		for ( j = 0; j <= iSlices; j++) 
+		{
+			GLfloat theta = (j == iSlices) ? 0.0f : j * dtheta;
+			GLfloat stheta = (GLfloat)(-sin(theta));
+			GLfloat ctheta = (GLfloat)(cos(theta));
+			
+			GLfloat x = stheta * srho;
+			GLfloat y = ctheta * srho;
+			GLfloat z = crho;
+            
+            glTexCoord2f(s, t);
+            glNormal3f(x, y, z);
+            glVertex3f(x * fRadius, y * fRadius, z * fRadius);
+			
+            x = stheta * srhodrho;
+			y = ctheta * srhodrho;
+			z = crhodrho;
+			glTexCoord2f(s, t - dt);
+            s += ds;
+            glNormal3f(x, y, z);
+            glVertex3f(x * fRadius, y * fRadius, z * fRadius);
+		}
+        glEnd();
+		
+        t -= dt;
+	}
+	glPopMatrix();
+}
+
+/* ---------- */
+
+// draw a cylinder of length l and radius r, aligned along the z axis
+void drawCylinder (GLfloat *pos, float l, float r, float zoffset, int lod, int min_lod, float wraptex_x, float wraptex_z)
+{
+	int i;
+	float tmp, ny, nz;
+	const int n = 4*lod;	// number of sides to the cylinder (divisible by 4)
+	
+	l *= 0.5;
+	
+	float sa_l = sa[lod - min_lod];
+	float ca_l = ca[lod - min_lod];
+	
+	glPushMatrix();
+	glTranslatef(pos[0], pos[1], pos[2]);
+	
+	// draw cylinder body
+	glShadeModel (GL_SMOOTH);
+	
+	ny=1; nz=0;		  // normal vector = (0,ny,nz)
+	
+	glBegin (GL_TRIANGLE_STRIP);
+	for (i=0; i<=n; i++) {
+		glTexCoord2f(wraptex_x*(float)i/(float)n, 0);
+		glNormal3d (ny, nz, 0);
+		glVertex3d (ny*r, nz*r, l+zoffset);
+		
+		glTexCoord2f(wraptex_x*(float)i/(float)n, wraptex_z);
+		glNormal3d (ny, nz, 0);
+		glVertex3d (ny*r, nz*r, -l+zoffset);
+		
+		// rotate ny,nz
+		tmp = ca_l*ny - sa_l*nz;
+		nz  = sa_l*ny + ca_l*nz;
+		ny  = tmp;
+	}
+	glEnd();
+	
+	// draw top cap
+	glShadeModel (GL_FLAT);
+	ny=1; nz=0;		  // normal vector = (0,ny,nz)
+	glBegin (GL_TRIANGLE_FAN);
+	glNormal3d (0,0,1);
+	glVertex3d (0,0,l+zoffset);
+	for (i=0; i<=n; i++) 
+	{
+		glNormal3d (0,0,1);
+		glVertex3d (ny*r,nz*r,l+zoffset);
+		
+		// rotate ny,nz
+		tmp = ca_l*ny - sa_l*nz;
+		nz  = sa_l*ny + ca_l*nz;
+		ny = tmp;
+	}
+	glEnd();
+	
+#if 0	
+	// draw bottom cap
+	ny=1; nz=0;
+	glBegin (GL_TRIANGLE_FAN);
+	glNormal3d (0,0,-1);
+	glVertex3d (0,0,-l+zoffset);
+	for (i=0; i<=n; i++) {
+		glNormal3d (0,0,-1);
+		glVertex3d (ny*r,nz*r,-l+zoffset);				
+		tmp = ca*ny + sa*nz;
+		nz = -sa*ny + ca*nz;
+		ny = tmp;
+	}
+	glEnd();
+#endif
+	
+	glPopMatrix();
+}
+
+
+/* draw an uncapped cone of length l, radius r, with apex at pos[], aligned along the z axis.
+orient = +1 or -1, controls whether cone is pointing up or down.
+*/
+void drawCone (GLfloat *pos, float l, float theta, float *rotaxis, float r, int N_lod, int orient)
+{
+	int i;
+	float tmp,ny,nz,a,ca,sa;
+	const int n = 4*N_lod;	// number of sides to the cylinder (divisible by 4)
+	
+	l *= 0.5;
+	a = (float)M_PI*2.0/(float)n;
+	sa = (float) sin(a);
+	ca = (float) cos(a);
+	
+	glPushMatrix();
+	glTranslatef(pos[0],pos[1],pos[2]);
+	glRotatef(theta,rotaxis[0],rotaxis[1],rotaxis[2]);
+	
+	glShadeModel (GL_SMOOTH);
+	
+	ny=1; nz=0;		  // normal vector = (0,ny,nz)
+	glBegin (GL_TRIANGLE_STRIP);
+	for (i=0; i<=n; i++) {
+		glNormal3d (ny,nz,0);
+		glVertex3d (0,0,orient*l);
+		glNormal3d (ny,nz,0);
+		glVertex3d (ny*r,nz*r,0);
+		
+		// rotate ny,nz
+		tmp = ca*ny - sa*nz;
+		nz = sa*ny + ca*nz;
+		ny = tmp;
+	}
+	glEnd();
+	
+	glPopMatrix();
+}
+

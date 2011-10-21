@@ -1,0 +1,107 @@
+K 25
+svn:wc:ra_dav:version-url
+V 53
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl
+END
+Player.h
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/EncounterX/!svn/ver/6/EncounterX/src/GameControl/Player.h
+END
+Hyperspace.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/Hyperspace.cpp
+END
+Titles.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/Titles.cpp
+END
+Hyperspace.h
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/Hyperspace.h
+END
+Titles.h
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/Titles.h
+END
+Game.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/EncounterX/!svn/ver/6/EncounterX/src/GameControl/Game.cpp
+END
+EventManager.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 70
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/EventManager.cpp
+END
+Game.h
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/Game.h
+END
+HUD.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/HUD.cpp
+END
+EventManager.h
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/EventManager.h
+END
+main.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/main.cpp
+END
+HUD.h
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/HUD.h
+END
+world.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/svn/EncounterX/!svn/ver/6/EncounterX/src/GameControl/world.cpp
+END
+Sound.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/Sound.cpp
+END
+world.h
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/world.h
+END
+Player.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/svn/EncounterX/!svn/ver/6/EncounterX/src/GameControl/Player.cpp
+END
+Sound.h
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/EncounterX/!svn/ver/4/EncounterX/src/GameControl/Sound.h
+END

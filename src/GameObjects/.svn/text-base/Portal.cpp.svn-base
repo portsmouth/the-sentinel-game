@@ -1,0 +1,591 @@
+
+/*
+ TO DO:
+ 
+ Bugs:
+ 
+- going into pause does weird things to alpha
+- need to draw portal in all regions to eliminate obvious draw in
+ 
+ 
+ */
+
+
+#include "Game.h"
+#include "Portal.h"
+#include "geometry.h"
+#include "math.h"
+
+//#define PORTAL_DEBUG 
+
+#define PORTAL_OPENING_DURATION 15.0
+#define PORTAL_OPEN_DURATION 2.0
+#define PORTAL_CLOSING_DURATION 15.0
+
+
+float ran2(long *idum);
+inline float FMAX(float arg1, float arg2)
+{
+	return (arg1 > arg2 ? arg1 : arg2);	
+}
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+/* portal is a dark chamber which the player has to fly into 
+   and stay inside for a while to advance. */
+
+Portal::Portal() //constructor
+{
+	portal_finallength = 0.05;
+	portal_height = 0.75*portal_finallength;
+	portal_chamber_depth = portal_finallength;
+	boundingcircle = sqrt( SQR(0.5*portal_chamber_depth)
+						  +SQR(0.5*portal_finallength) );
+	
+	float mat_shin[1] = {25.0};
+	float mat_spec[4] = {0.1, 0.1, 1.0, 1.0};	
+	float mat_diff[4] = {0.2, 0.3, 0.5, 1.0};
+	float mat_ambi[4] = {0.0, 0.0, 0.0, 1.0};
+	float mat_emis[4] = {0.3, 0.0, 0.8, 1.0};
+	for (int a=0;a<3;a++) {
+		mat_specular[a] = mat_spec[a];
+		mat_diffuse[a] = mat_diff[a];
+		mat_ambient[a] = mat_ambi[a];
+		mat_emission[a] = mat_emis[a];
+	}		
+	mat_shininess[0] = mat_shin[0];
+	
+	float mEmission[4] = {0.0,0.0,0.0,1.0};
+	for (int a=0;a<4;a++)
+		no_emission[a] = mEmission[a];	
+}
+
+void Portal::Init()
+{
+	theWorld = Game::getWorld();
+	terrain_edge_size = theWorld->terrain->getTerrainEdgeSize();
+	state = PORTAL_CLOSED;
+}
+
+void Portal::computeVertices(float currentlength)
+{
+	//BL
+	portal_vertex[0][0] = portal_center[0] - 0.5*currentlength*portal_direction[0];
+	portal_vertex[0][1] = portal_center[1] - 0.5*currentlength*portal_direction[1];
+	portal_vertex[0][2] = lowheight;
+	//BR
+	portal_vertex[1][0] = portal_center[0] + 0.5*currentlength*portal_direction[0];
+	portal_vertex[1][1] = portal_center[1] + 0.5*currentlength*portal_direction[1];
+	portal_vertex[1][2] = lowheight;
+	//TR
+	portal_vertex[2][0] = portal_center[0] + 0.5*currentlength*portal_direction[0];
+	portal_vertex[2][1] = portal_center[1] + 0.5*currentlength*portal_direction[1];
+	portal_vertex[2][2] = topheight;
+	//TL
+	portal_vertex[3][0] = portal_center[0] - 0.5*currentlength*portal_direction[0];
+	portal_vertex[3][1] = portal_center[1] - 0.5*currentlength*portal_direction[1];
+	portal_vertex[3][2] = topheight;
+	   
+	for (int a=0;a<3;a++) {
+		for (int b=0;b<3;b++) {		
+			
+			portal_mirror_center[a+3*b][0] = 
+			    portal_center[0] + ((float)a-1.0)*terrain_edge_size;	
+			portal_mirror_center[a+3*b][1] = 
+				portal_center[1] + ((float)b-1.0)*terrain_edge_size;	
+			
+			for (int c=0;c<4;c++) {	
+				portal_mirror_vertex[a+3*b][c][0] = 
+				    portal_vertex[c][0] + ((float)a-1.0)*terrain_edge_size;				
+				portal_mirror_vertex[a+3*b][c][1] = 
+					portal_vertex[c][1] + ((float)b-1.0)*terrain_edge_size;				
+				portal_mirror_vertex[a+3*b][c][2] = portal_vertex[c][2];				
+			}
+			
+		}
+	}
+	
+}
+
+
+/* choose a portal center position which keeps portal edges outside of cylinders */
+void Portal::initialposition()
+{
+	static long seed = -30;
+	bool cylcollision, edgeproximity;
+	int tries=0;
+	float maxdim = 1.2*FMAX(sqrt(SQR(portal_chamber_depth)+SQR(0.5*portal_finallength)),
+						portal_finallength);
+		
+	do 
+	{
+		portal_center[0] = ran2(&seed)*terrain_edge_size;
+		portal_center[1] = ran2(&seed)*terrain_edge_size;
+		cylcollision = theWorld->TestCollision_PortalCylinder(portal_center,maxdim);		
+		edgeproximity = checkEdge(portal_center);
+		
+		tries++;
+		if (tries>50) 
+		{
+			printf("warning: cannot find a portal position in a reasonable time\n");
+			tries=0;
+		}
+		
+	} while (cylcollision || edgeproximity);		
+	
+	double phi = acos(2.0*ran2(&seed)-1.0);
+	portal_direction[0] = (float)cos(phi);
+	portal_direction[1] = (float)sin(phi);
+	portal_direction[2] = 0.0;
+	
+	zaxis[0] = 0.0; zaxis[1] = 0.0; zaxis[2] = 1.0;	
+	normcrossprod(portal_direction,zaxis,portal_normal);
+
+	portal_chamber_center[0] = portal_center[0] + 0.5*portal_chamber_depth*portal_normal[0];
+	portal_chamber_center[1] = portal_center[1] + 0.5*portal_chamber_depth*portal_normal[1];
+	
+	terrain_height = theWorld->terrain->height(portal_center[0],portal_center[1]);
+	//float hover_height = Game::getPlayer()->GetHoverHeight();	
+	lowheight =  terrain_height - 10.0*portal_height;
+	topheight =  terrain_height + portal_height;
+			
+	computeVertices(portal_currentlength);
+	
+	printf("portal opened at position: %f %f\n",portal_center[0],portal_center[1]);	
+
+}
+
+
+bool Portal::checkEdge(float *pos)
+{
+	float maxdim = 1.2*FMAX(sqrt(SQR(portal_chamber_depth)+SQR(0.5*portal_finallength)),
+						portal_finallength);
+	
+	bool left   = pos[0] < maxdim;
+	bool right  = pos[0] > terrain_edge_size-maxdim;
+	bool bottom = pos[1] < maxdim;
+	bool top    = pos[1] > terrain_edge_size-maxdim;
+	return (left || right || top || bottom);
+}
+
+
+Portal::~Portal() //destructor
+{}
+
+
+float Portal::getAlpha()
+{
+	float alpha;
+	switch (state) 
+	{		
+		case PORTAL_OPENING:	
+			float openingtime = openingTimer.time();
+			alpha = (openingtime/PORTAL_OPENING_DURATION);
+			break;
+			
+		case PORTAL_OPEN:
+			alpha = 1.0;
+			break;
+			
+		case PORTAL_CLOSING:
+			float closingtime = closingTimer.time();
+			alpha = (1.0-closingtime/PORTAL_CLOSING_DURATION);
+			break;
+			
+		case PORTAL_CLOSED:
+			alpha = 1.0;
+			break;
+			
+		case PORTAL_HYPERSPACE:	
+			break;
+	}
+	return alpha;
+}
+
+
+void Portal::draw(void)
+{
+	glMaterialfv(GL_FRONT_AND_BACK, GL_SHININESS, mat_shininess);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, mat_specular);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, mat_diffuse);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, mat_ambient);
+	glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, mat_emission);
+	
+	glDisable(GL_LIGHTING);	
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_DEPTH_TEST);
+	
+	glShadeModel(GL_SMOOTH);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+	
+	float portal_color[3] = {0.0,0.0,0.0};
+	
+	/* draw portal and all its visible mirror copies */	
+	Player *player = Game::getPlayer();	
+	float *view_point = player->GetViewPoint();
+
+	/* portal transparency depends on current state */
+	float alpha = getAlpha();
+	switch (state) 
+	{		
+		case PORTAL_OPENING:	
+			glDepthMask(GL_FALSE);
+			break;
+			
+		case PORTAL_OPEN:
+			glDepthMask(GL_TRUE);
+			break;
+			
+		case PORTAL_CLOSING:
+			glDepthMask(GL_FALSE);
+			break;
+			
+		case PORTAL_CLOSED:
+			glDepthMask(GL_TRUE);
+			break;
+			
+		case PORTAL_HYPERSPACE:
+			break;
+	}
+	
+	//TO DO: this is really awful...
+	
+	glColor4f(portal_color[0],portal_color[1],portal_color[2],alpha);	
+	
+	glBegin(GL_QUADS);		
+		
+	/* mirror portals */
+	for (int a=0;a<9;a++) 
+	{		
+		
+		if (visible(portal_mirror_center[a],view_point,terrain_edge_size) && a!=4) 
+		{
+			
+			//portal door
+			for (int b=0;b<4;b++) 
+			{					
+				glVertex3f(portal_mirror_vertex[a][b][0],
+						   portal_mirror_vertex[a][b][1],
+						   portal_mirror_vertex[a][b][2]);
+			}
+			
+			//portal chamber ceiling
+			glVertex3f(portal_mirror_vertex[a][3][0], 
+					   portal_mirror_vertex[a][3][1], 
+					   portal_mirror_vertex[a][3][2]);
+			glVertex3f(portal_mirror_vertex[a][2][0], 
+					   portal_mirror_vertex[a][2][1], 
+					   portal_mirror_vertex[a][2][2]);
+			glVertex3f(portal_mirror_vertex[a][2][0] + portal_chamber_depth*portal_normal[0],
+					   portal_mirror_vertex[a][2][1] + portal_chamber_depth*portal_normal[1],
+					   portal_mirror_vertex[a][2][2] + portal_chamber_depth*portal_normal[2]);
+			glVertex3f(portal_mirror_vertex[a][3][0] + portal_chamber_depth*portal_normal[0],
+					   portal_mirror_vertex[a][3][1] + portal_chamber_depth*portal_normal[1],
+					   portal_mirror_vertex[a][3][2] + portal_chamber_depth*portal_normal[2]);
+			
+			//portal back door
+			for (int b=0;b<4;b++) 
+			{
+				glVertex3f(portal_mirror_vertex[a][b][0] + portal_chamber_depth*portal_normal[0],
+						   portal_mirror_vertex[a][b][1] + portal_chamber_depth*portal_normal[1],
+						   portal_mirror_vertex[a][b][2] + portal_chamber_depth*portal_normal[2]);
+			}	
+			
+			//portal sides
+			glVertex3f(portal_mirror_vertex[a][0][0], 
+					   portal_mirror_vertex[a][0][1], 
+					   portal_mirror_vertex[a][0][2]);
+			glVertex3f(portal_mirror_vertex[a][3][0], 
+					   portal_mirror_vertex[a][3][1], 
+					   portal_mirror_vertex[a][3][2]);
+			glVertex3f(portal_mirror_vertex[a][3][0] + portal_chamber_depth*portal_normal[0],
+					   portal_mirror_vertex[a][3][1] + portal_chamber_depth*portal_normal[1],
+					   portal_mirror_vertex[a][3][2] + portal_chamber_depth*portal_normal[2]);
+			glVertex3f(portal_mirror_vertex[a][0][0] + portal_chamber_depth*portal_normal[0],
+					   portal_mirror_vertex[a][0][1] + portal_chamber_depth*portal_normal[1],
+					   portal_mirror_vertex[a][0][2] + portal_chamber_depth*portal_normal[2]);
+			
+			glVertex3f(portal_mirror_vertex[a][2][0], 
+					   portal_mirror_vertex[a][2][1], 
+					   portal_mirror_vertex[a][2][2]);
+			glVertex3f(portal_mirror_vertex[a][1][0], 
+					   portal_mirror_vertex[a][1][1], 
+					   portal_mirror_vertex[a][1][2]);
+			glVertex3f(portal_mirror_vertex[a][1][0] + portal_chamber_depth*portal_normal[0],
+					   portal_mirror_vertex[a][1][1] + portal_chamber_depth*portal_normal[1],
+					   portal_mirror_vertex[a][1][2] + portal_chamber_depth*portal_normal[2]);
+			glVertex3f(portal_mirror_vertex[a][2][0] + portal_chamber_depth*portal_normal[0],
+					   portal_mirror_vertex[a][2][1] + portal_chamber_depth*portal_normal[1],
+					   portal_mirror_vertex[a][2][2] + portal_chamber_depth*portal_normal[2]);
+		}
+		
+	}
+	
+	//portal door
+	for (int a=0;a<4;a++) 
+		glVertex3f(portal_vertex[a][0],
+				   portal_vertex[a][1],
+				   portal_vertex[a][2]);
+	
+	
+	//portal chamber ceiling
+	glVertex3f(portal_vertex[3][0], portal_vertex[3][1], portal_vertex[3][2]);
+	glVertex3f(portal_vertex[2][0], portal_vertex[2][1], portal_vertex[2][2]);
+	glVertex3f(portal_vertex[2][0] + portal_chamber_depth*portal_normal[0],
+			   portal_vertex[2][1] + portal_chamber_depth*portal_normal[1],
+			   portal_vertex[2][2] + portal_chamber_depth*portal_normal[2]);
+	glVertex3f(portal_vertex[3][0] + portal_chamber_depth*portal_normal[0],
+			   portal_vertex[3][1] + portal_chamber_depth*portal_normal[1],
+			   portal_vertex[3][2] + portal_chamber_depth*portal_normal[2]);
+	
+	//portal back door
+	for (int a=0;a<4;a++) 
+		glVertex3f(portal_vertex[a][0] + portal_chamber_depth*portal_normal[0],
+				   portal_vertex[a][1] + portal_chamber_depth*portal_normal[1],
+				   portal_vertex[a][2] + portal_chamber_depth*portal_normal[2]);
+	
+	//portal sides
+	glVertex3f(portal_vertex[0][0], portal_vertex[0][1], portal_vertex[0][2]);
+	glVertex3f(portal_vertex[3][0], portal_vertex[3][1], portal_vertex[3][2]);
+	glVertex3f(portal_vertex[3][0] + portal_chamber_depth*portal_normal[0],
+			   portal_vertex[3][1] + portal_chamber_depth*portal_normal[1],
+			   portal_vertex[3][2] + portal_chamber_depth*portal_normal[2]);
+	glVertex3f(portal_vertex[0][0] + portal_chamber_depth*portal_normal[0],
+			   portal_vertex[0][1] + portal_chamber_depth*portal_normal[1],
+			   portal_vertex[0][2] + portal_chamber_depth*portal_normal[2]);
+	
+	glVertex3f(portal_vertex[2][0], portal_vertex[2][1], portal_vertex[2][2]);
+	glVertex3f(portal_vertex[1][0], portal_vertex[1][1], portal_vertex[1][2]);
+	glVertex3f(portal_vertex[1][0] + portal_chamber_depth*portal_normal[0],
+			   portal_vertex[1][1] + portal_chamber_depth*portal_normal[1],
+			   portal_vertex[1][2] + portal_chamber_depth*portal_normal[2]);
+	glVertex3f(portal_vertex[2][0] + portal_chamber_depth*portal_normal[0],
+			   portal_vertex[2][1] + portal_chamber_depth*portal_normal[1],
+			   portal_vertex[2][2] + portal_chamber_depth*portal_normal[2]);
+	
+	glEnd();
+	
+	glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, no_emission);	
+	glDisable(GL_BLEND);
+	glDepthMask(GL_TRUE);
+	glColor4f(1.0,1.0,1.0,1.0);	
+
+}
+
+/* open portal if it is not already open */
+void Portal::Open()
+{
+	if (state==PORTAL_CLOSED) 
+	{
+#ifdef PORTAL_DEBUG
+		printf("portal opening\n");
+#endif
+		portal_currentlength = 0.0;
+		initialposition();
+		state = PORTAL_OPENING;
+		openingTimer.start();	
+	}
+}
+
+void Portal::Close()
+{
+	state = PORTAL_CLOSED;
+}
+
+Portal_States Portal::GetState()
+{
+	return state;
+}
+
+Portal_States Portal::Update()
+{	
+	
+#ifdef PORTAL_DEBUG
+	static bool OPENING_PRINTF = true;
+	static bool OPEN_PRINTF = true;
+	static bool CLOSING_PRINTF = true;
+	static bool CLOSED_PRINTF = true;
+#endif
+
+	switch (state) 
+	{		
+		case PORTAL_OPENING:	
+#ifdef PORTAL_DEBUG
+			if (OPENING_PRINTF) 
+			{
+				printf("portal state: PORTAL_OPENING\n");
+				OPENING_PRINTF = false;
+				CLOSED_PRINTF = true;
+			}
+#endif
+						
+			//make the portal slide open
+			float openingtime = openingTimer.time();
+			portal_currentlength = (openingtime/PORTAL_OPENING_DURATION)*portal_finallength;
+			computeVertices(portal_currentlength);
+						
+			if (openingtime>PORTAL_OPENING_DURATION) 
+			{
+				state = PORTAL_OPEN;
+#ifdef PORTAL_DEBUG
+				OPENING_PRINTF = true;
+#endif
+				portal_currentlength = portal_finallength;
+				computeVertices(portal_currentlength);
+				openingTimer.stop();
+				openTimer.start();
+			}			
+			break;
+			
+		case PORTAL_OPEN:
+#ifdef PORTAL_DEBUG
+			if (OPEN_PRINTF) 
+			{
+				printf("portal state: PORTAL_OPEN:\n"); 
+				OPEN_PRINTF = false;
+			}	
+#endif
+
+			if (openTimer.time()>PORTAL_OPEN_DURATION) 
+			{
+				state = PORTAL_CLOSING;
+#ifdef PORTAL_DEBUG
+				OPEN_PRINTF = true;
+#endif
+				openTimer.stop();
+				closingTimer.start();
+			}
+			break;
+			
+		case PORTAL_CLOSING:
+#ifdef PORTAL_DEBUG
+			if (CLOSING_PRINTF) 
+			{
+				printf("portal state: PORTAL_CLOSING\n"); 
+				CLOSING_PRINTF = false;
+			}		
+#endif
+			//make the portal slide shut
+			float closingtime = closingTimer.time();
+			portal_currentlength = (1.0-closingtime/PORTAL_CLOSING_DURATION)*portal_finallength;
+			computeVertices(portal_currentlength);
+					
+			if (closingtime>PORTAL_CLOSING_DURATION) 
+			{
+				state = PORTAL_CLOSED;
+#ifdef PORTAL_DEBUG
+				CLOSING_PRINTF = true;
+#endif
+				closingTimer.stop();				
+			}
+			break;
+			
+		case PORTAL_CLOSED:
+#ifdef PORTAL_DEBUG
+			if (CLOSED_PRINTF) 
+			{				
+				printf("portal state: PORTAL_CLOSED\n");
+				CLOSED_PRINTF = false;
+			}		
+#endif
+			break;
+			
+		case PORTAL_HYPERSPACE:	
+			break;
+	}
+
+	return state;
+}
+
+/* check if player is inside the portal */
+bool Portal::PlayerEntered()
+{
+	if (state == PORTAL_CLOSED) return false;
+	
+	Player *pPlayer = Game::getPlayer();
+	float *viewpoint = pPlayer->GetViewPoint();
+	float viewpoint2d[3] = {viewpoint[0],viewpoint[1],0.0};
+	
+	/* only need to do full check if player is within a distance 
+	   boundingcircle from portal chamber center */
+	if (!visible(viewpoint2d,portal_chamber_center,boundingcircle)) 
+	{
+		return false;
+	}
+	else 
+	{
+		
+		float corners[4][2] = 
+	    {
+		    {portal_vertex[0][0],portal_vertex[0][1]},
+		    {portal_vertex[1][0],portal_vertex[1][1]},
+		    {portal_vertex[1][0] + portal_chamber_depth*portal_normal[0],
+			 portal_vertex[1][1] + portal_chamber_depth*portal_normal[1]},
+		    {portal_vertex[0][0] + portal_chamber_depth*portal_normal[0],
+			 portal_vertex[0][1] + portal_chamber_depth*portal_normal[1]}
+		};
+		
+		float midpoints[4][3];
+		for (int a=0;a<2;a++) 
+		{		
+			midpoints[0][a] = 0.5*(corners[0][a] + corners[1][a]);
+			midpoints[1][a] = 0.5*(corners[1][a] + corners[2][a]);
+			midpoints[2][a] = 0.5*(corners[2][a] + corners[3][a]);
+			midpoints[3][a] = 0.5*(corners[3][a] + corners[0][a]);
+		}
+		for (int a=0;a<4;a++) 
+		{		
+			midpoints[a][2] = 0.0;
+		}
+		
+		float point_to_midpoint[4][3];
+		for (int a=0;a<4;a++) 
+		{		
+			for (int b=0;b<3;b++) 
+			{		
+				point_to_midpoint[a][b] = midpoints[a][b] - viewpoint2d[b];
+			}
+		}
+		
+		float edges[4][3];
+		for (int b=0;b<3;b++) 
+		{
+			edges[0][b] = corners[1][b] - corners[0][b];
+			edges[1][b] = corners[2][b] - corners[1][b];
+			edges[2][b] = corners[3][b] - corners[2][b];
+			edges[3][b] = corners[0][b] - corners[3][b];
+		}	
+		for (int a=0;a<4;a++) 
+			edges[a][2] = 0.0;
+		
+		float normaltests[4][3], scalartests[4];
+		for (int a=0;a<4;a++) 
+		{		
+			normcrossprod(point_to_midpoint[a],edges[a],normaltests[a]);
+			scalartests[a] = scalarprod(normaltests[a],zaxis);
+		}
+		
+		bool inside = true;
+		for (int a=0;a<4;a++) 		
+			inside = inside && (scalartests[a]<0.0);
+
+		return inside;
+	}
+}
+
+void Portal::PauseTimers()
+{
+	openingTimer.pause();
+	openTimer.pause();
+	closingTimer.pause();
+}
+
+void Portal::UnpauseTimers()
+{
+	openingTimer.unpause();
+	openTimer.unpause();
+	closingTimer.unpause();	
+}
+

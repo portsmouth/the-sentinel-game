@@ -1,0 +1,761 @@
+
+
+#include "Game.h"
+#include "geometry.h"
+#include "FileUtils.h"
+#include "Filenames.h"
+
+#include <string>
+#include <iostream>
+#include <assert.h>
+using std::string;
+using std::cout;
+using std::endl;
+
+float ran2(long *idum);
+inline float FMAX(float arg1, float arg2)
+{
+	return (arg1 > arg2 ? arg1 : arg2);	
+}
+inline float SQR(float x) {
+	return (x) == 0.0 ? 0.0 : (x)*(x);
+}
+
+const unsigned int MAX_PLAYER_BULLETS = 64;
+const unsigned int MAX_ENEMY_BULLETS = 25;
+
+const float PLAYER_BULLET_LIFETIME = 2.5;
+const float ENEMY_BULLET_LIFETIME = 1.75;
+
+
+//constructor
+World::World(int level_num) :
+
+Ncyl(16), 	//number of cylinders
+max_lod_cyl(5), 
+min_lod_cyl(1)
+{		
+	level = level_num;
+	
+	//define terrain parameters, later these will be level specific
+	const int mNgrid = 16;
+	const int mN_LOD_Cells = 3;
+	const int mN_regions = 5;
+	const int mN_LOD_levels = 4;
+	const int mSeed = -level;	
+	const float mTerrain_edge_size = 1.0;
+	const float mTerrain_texture_cover = 1<<5;
+	const float mAmp = 2.0e-2; 
+	const float mNp = -1.0; 
+	const int mKtrunc = 6;
+
+	terrain = new Terrain(mNgrid,
+						  mN_LOD_Cells,
+						  mN_regions,
+						  mN_LOD_levels,
+						  mSeed,
+						  mTerrain_edge_size,
+						  mTerrain_texture_cover,
+						  mAmp,
+						  mNp,
+						  mKtrunc);
+}
+
+void World::Init()
+{
+	loadTextures();
+	createCylinders();
+	sky.Init();	
+	pPortal = Game::getPortal();	
+}
+
+//destructor
+World::~World()
+{
+	//free up texture resources specific to a level
+	TextureLibrary *texturelibrary = Game::getTextureLibrary();
+	string resourcepath = FileUtils::GetApplicationResourcesFolderPath();
+
+	texturelibrary->FreeTexture(resourcepath + kCylinderTexture1);
+	texturelibrary->FreeTexture(resourcepath + kTerrainLarge);
+	texturelibrary->FreeTexture(resourcepath + kBeamPlayer);
+	texturelibrary->FreeTexture(resourcepath + kBeamEnemy);	
+
+	//delete cylinder field
+	Cylinder *pCyl;
+	
+	for (vector<GameObject*>::iterator iter = cylinder_field.begin(); 
+		 iter != cylinder_field.end(); ++iter) 
+	{
+		pCyl = (Cylinder*)*iter;
+		delete pCyl;
+	}
+	cylinder_field.clear();
+	
+	free_cylinder_lookup_tables(max_lod_cyl,min_lod_cyl);
+
+	//delete player and enemy bullets
+	Bullet *pBullet;
+	
+	for (vector<GameObject*>::iterator iter = player_bullets.begin(); 
+		 iter != player_bullets.end(); ++iter) 
+	{
+		pBullet = (Bullet*)*iter;
+		delete pBullet;
+	}
+	player_bullets.clear();
+	
+	for (vector<GameObject*>::iterator iter = enemy_bullets.begin(); 
+		 iter != enemy_bullets.end(); ++iter) 
+	{
+		pBullet = (Bullet*)*iter;
+		delete pBullet;
+	}
+	enemy_bullets.clear();
+	
+	delete terrain;
+}
+
+
+void World::loadTextures()
+{
+	//need (eventually) to make sure all textures are cleanly deallocated 
+	
+	TextureLibrary *texturelibrary = Game::getTextureLibrary();
+	string resourcepath = FileUtils::GetApplicationResourcesFolderPath();
+	
+	playerbullet_texture = kBeamPlayer;
+	texturelibrary->GetTexture(resourcepath + playerbullet_texture, BUILD_MIPMAPS);
+	
+	enemybullet_texture = kBeamEnemy;
+	texturelibrary->GetTexture(resourcepath + enemybullet_texture, BUILD_MIPMAPS);
+		
+	//cylinder_texture = kStoneTexture512;
+	cylinder_texture = kCylinderTexture1;
+	texturelibrary->GetTexture(resourcepath + cylinder_texture, BUILD_MIPMAPS);
+
+	terrain->SetTexture(kTerrainLarge);
+	
+	sky.loadTextures();
+	
+	Game::getHUD()->SetTextures();
+}
+
+
+/* create cylinder field */
+void World::createCylinders()
+{
+	Cylinder *pCyl;
+	
+	unsigned int n,m;
+	float terrain_edge_size = terrain->getTerrainEdgeSize();
+	
+	float *cyl_posx = new float[Ncyl];
+	float *cyl_posy = new float[Ncyl];
+		
+	//TO DO: level specific
+	float max_cyl_radius = 12.5e-3; //this must be less than terrain_edge_size/COLLISION_GRID
+	assert( max_cyl_radius < terrain_edge_size/COLLISION_GRID );
+	float min_cyl_radius = 6.0e-3;	
+	float max_cyl_height = 7.2e-2;
+	float min_cyl_height = 3.75e-2;
+
+	gen_cylinder_lookup_tables(min_lod_cyl,max_lod_cyl);
+
+	/* cylinders must lie within at least a distance of 1.5*(enemy.radius+max_cyl_radius) from each 
+	   central domain boundary (I assume bullet radius is less than max_cyl_radius). This is done to 
+	   avoid tricky situation where collision occurs between cylinder and enemy/bullet on opposite 
+	   sides of the domain edge (such collisions would not be detected) */	
+	float edge = 1.5*(enemy.radius+max_cyl_radius);
+		
+	/* make sure that cylinder centers are all further apart than 2.0*(max_cylinder_radius + enemy_radius), 
+	   or say 1.5 times that, otherwise on moving enemy towards cylinder after a collision detection, there 
+	   will be an error if enemy collides with an additional cylinder. */			
+	float min_dist = 1.5*2.0*(enemy.radius+max_cyl_radius);
+			
+	/* generate a random cylinder field */
+	float dpos[2], dist;
+	bool clash;	
+	n=0;
+	while (n<Ncyl)
+	{		
+		do 
+		{
+			clash = false;
+			
+			/* generate a location sufficiently far from edge */
+			do 
+			{
+				cyl_posx[n] =  ran2(&seed)*terrain_edge_size;
+				cyl_posy[n] =  ran2(&seed)*terrain_edge_size;			
+			} while ( cyl_posx[n] < edge || cyl_posx[n] > terrain_edge_size-edge ||
+				      cyl_posy[n] < edge || cyl_posy[n] > terrain_edge_size-edge );
+					   
+			/* test if this fits into the field generated so far. If not, regenerate */
+			for (unsigned int m=0;m<n;m++) 
+			{
+				dpos[0] = cyl_posx[n] - cyl_posx[m];						
+				dpos[1] = cyl_posy[n] - cyl_posy[m];									
+				dist = magnitude2d(dpos);
+				if (dist<min_dist) 
+				{
+					clash=true;
+					break;
+				}
+			}
+			
+		} while (clash == true);
+			
+		++n;
+	}
+				
+	/* create cylinders with these positions and random (within limits) radius and height */
+	float cyl_radius, cyl_height;					
+	int num=0;
+	for (vector<GameObject*>::size_type i=0; i != Ncyl; ++i)
+	{		
+		cyl_radius = min_cyl_radius+ran2(&seed)*(max_cyl_radius-min_cyl_radius);
+		cyl_height = min_cyl_height+ran2(&seed)*(max_cyl_height-min_cyl_height);
+				
+		pCyl = new Cylinder(cyl_posx[num], cyl_posy[num], 
+							cyl_radius, cyl_height,
+							max_lod_cyl,min_lod_cyl,
+							cylinder_texture,
+							terrain);
+							
+		cylinder_field.push_back(pCyl);
+		
+		pCyl->getCollisiongridIndices(&n,&m);
+		cylinder_collison_list[n][m].push_back(pCyl);
+
+		num++;
+	}			
+				
+	delete [] cyl_posx;
+	delete [] cyl_posy;	
+}
+
+
+void World::createPlayerBullet(float *origin, float *velocity, float *direction)
+{
+	//check the number of bullets is not maximal
+	if (player_bullets.size()<MAX_PLAYER_BULLETS) {
+		
+		Bullet *pBullet = new Bullet(PLAYER_BULLET,playerbullet_texture);	
+		//attempt to fire bullet (may fail if player is too close to a cylinder)
+		bool fired = pBullet->Fire(origin,velocity,direction);					
+		if (fired) 
+		{
+			player_bullets.push_back(pBullet);
+			//play player-bullet firing sound
+			Sound *soundplayer = Game::getSound();
+			soundplayer->PlayGeneralSound(PlayerFire,0.5);
+			Player *player = Game::getPlayer();
+			player->firedTimer.start();
+		}
+		else 
+		{
+			//play a sound indicating player bullet cannot be fired
+		}
+		
+	}
+}
+
+void World::createEnemyBullet(float *origin, float *velocity, float *direction)
+{
+	//check the number of bullets is not maximal
+	if (enemy_bullets.size()<MAX_ENEMY_BULLETS) 
+	{
+
+		Bullet *pBullet = new Bullet(ENEMY_BULLET,enemybullet_texture);	
+		//attempt to fire bullet (may fail if enemy is too close to a cylinder)
+		bool fired = pBullet->Fire(origin,velocity,direction);					
+		if (fired) 
+		{
+			enemy_bullets.push_back(pBullet);
+			//play enemy-bullet firing sound
+			float *enemypos = enemy.position;
+			Sound *soundplayer = Game::getSound();
+			float soundvolume = soundplayer->ComputeSoundVolume(enemypos);
+			soundplayer->PlayGeneralSound(EnemyFire,soundvolume);
+			
+			//make HUD scanner light pulse once to indicate enemy fire
+			HUD *pHUD = Game::getHUD();
+			pHUD->setLight(RED_SL,SL_PULSE);
+		}
+		else 
+		{
+			//play a sound indicating enemy bullet cannot be fired
+		}		
+
+	}	
+}
+
+
+void World::draw()
+{
+	Player *player = Game::getPlayer();
+	player->SetObserverProjection();
+		
+	static bool PIPDLF = FALSE; //Player_Inside_Portal_During_Last_Frame
+	
+	//draw sky
+	//sky.draw();
+
+	//draw terrain, and darken if inside portal
+	Portal_States sPortal = pPortal->GetState();
+
+	if ( pPortal->PlayerEntered() )
+	{
+		if ( sPortal == PORTAL_OPEN )
+		{
+			PIPDLF = TRUE;
+		}
+		else if ( sPortal != PORTAL_CLOSED )
+		{	
+			float alpha = 1.0 - pPortal->getAlpha();
+			PIPDLF = TRUE;
+			terrain->modify_material(alpha);	
+			terrain->draw();		
+		}
+	}
+	else {
+		if (PIPDLF) //only modify terrain material if we just emerged from the portal
+		{
+			PIPDLF = FALSE;
+			terrain->modify_material(1.0);			
+		}		
+		terrain->draw();		
+	}
+
+	//draw cylinder field
+	for (vector<GameObject*>::iterator iter = cylinder_field.begin();
+		 iter != cylinder_field.end(); ++iter) 
+	{
+		(*iter)->draw();
+	}
+
+	//draw enemy if it's alive
+	if (enemy.GetState() == (Enemy_States)ENEMY_ALIVE) enemy.draw();
+	
+	//draw level portal if it's open
+	if (sPortal != PORTAL_CLOSED) pPortal->draw();							
+	
+	//draw current set of player bullets
+	for (vector<GameObject*>::iterator iter = player_bullets.begin();
+		 iter != player_bullets.end(); ++iter) 
+	{
+		(*iter)->draw();
+	}
+	
+	//draw current set of enemy bullets
+	for (vector<GameObject*>::iterator iter = enemy_bullets.begin();
+		 iter != enemy_bullets.end(); ++iter) 
+	{
+		(*iter)->draw();
+	}
+		
+}
+
+void World::PauseTimers()
+{
+	enemy.PauseTimers();
+	for (vector<GameObject*>::iterator iter = player_bullets.begin();
+		 iter != player_bullets.end(); ++iter) 
+	{
+		(*iter)->pauseTimer();
+	}
+	for (vector<GameObject*>::iterator iter = enemy_bullets.begin();
+		 iter != enemy_bullets.end(); ++iter) 
+	{
+		(*iter)->pauseTimer();
+	}
+}
+
+void World::UnpauseTimers()
+{
+	enemy.UnpauseTimers();
+	for (vector<GameObject*>::iterator iter = player_bullets.begin();
+		 iter != player_bullets.end(); ++iter) 
+	{
+		(*iter)->unpauseTimer();
+	}
+	for (vector<GameObject*>::iterator iter = enemy_bullets.begin();
+		 iter != enemy_bullets.end(); ++iter) 
+	{
+		(*iter)->unpauseTimer();
+	}
+}
+
+
+float World::GetBulletLifetime(Bullet_types bType)
+{
+	float lt;
+	
+	switch (bType)
+	{
+		case PLAYER_BULLET:
+			lt = PLAYER_BULLET_LIFETIME;
+			break;
+			
+		case ENEMY_BULLET:
+			lt = ENEMY_BULLET_LIFETIME;		
+			break;
+	}
+	
+	return lt;	
+}
+
+/***************************************************************************/
+/*                  cylinder field collision detection                     */
+/***************************************************************************/
+
+
+inline void World::wraptogrid(int *np) 
+{
+	if(*np==COLLISION_GRID) *np=0; 
+	if(*np==-1) *np=COLLISION_GRID-1;
+}
+
+
+/* if there are any cylinders in the collision cell containing interval_point, 
+   check if they collide with the ray from interval_point to interval_end */
+bool World::TestCollision_RayCylinder(float *interval_point, float *interval_end)
+{	
+	bool collide;
+	float tes = terrain->getTerrainEdgeSize();
+
+	float wrapped[3];
+	WrapDomain(interval_point,wrapped,tes);
+	
+	int n = int((float)COLLISION_GRID*wrapped[0]/tes);
+	int m = int((float)COLLISION_GRID*wrapped[1]/tes);	
+	
+	if (n==COLLISION_GRID) n-=1;
+	if (m==COLLISION_GRID) m-=1;
+	
+	for(int np=-1;np<=1;np++) {
+		for(int mp=-1;mp<=1;mp++) {			
+			if (collide = checkcylinders_raycollision(n+np,
+													  m+mp,
+													  interval_point,
+													  interval_end)) break;
+		}
+		if (collide) break;
+	}
+	return collide;	
+	
+}
+
+bool World::checkcylinders_raycollision(int n, int m, 
+										float *interval_point,
+										float *interval_end)
+{
+	wraptogrid(&n);
+	wraptogrid(&m);
+	
+	bool collide;
+	if (cylinder_collison_list[n][m].empty()) {collide = false;}
+	else {
+		for (vector<Cylinder*>::iterator iter = cylinder_collison_list[n][m].begin();
+			 iter != cylinder_collison_list[n][m].end(); ++iter) 
+		{			
+			if (collide = (*iter)->TestCollisionRayInterval(interval_point,
+															interval_end)) break;
+		}		
+	}
+	return collide;
+}
+
+
+
+/* test whether a general point intersects with cylinder field 
+   (i.e. point lies on or inside some cylinder)*/
+bool World::TestCollision_PointCylinder(float *candidate_point)
+{
+	bool collide;
+	float tes = terrain->getTerrainEdgeSize();
+	
+	int n = int((float)COLLISION_GRID*candidate_point[0]/tes);
+	int m = int((float)COLLISION_GRID*candidate_point[1]/tes);	
+	
+	if (n==COLLISION_GRID) n-=1;
+	if (m==COLLISION_GRID) m-=1;
+	
+	for(int np=-1;np<=1;np++) 
+	{
+		for(int mp=-1;mp<=1;mp++) 
+			if (collide = checkcylinders_pointcollision(n+np,m+mp,candidate_point)) break;
+		if (collide) break;
+	}
+	return collide;	
+}
+
+
+/* test for collision between player and the cylinder field */
+Cylinder* World::TestCollision_PlayerCylinder(float *candidate_point)
+{
+	float tes = terrain->getTerrainEdgeSize();
+	
+	int n = int((float)COLLISION_GRID*candidate_point[0]/tes);
+	int m = int((float)COLLISION_GRID*candidate_point[1]/tes);	
+		
+	if (n==COLLISION_GRID) n-=1;
+	if (m==COLLISION_GRID) m-=1;
+	
+	Cylinder *pCyl;	
+	for(int np=-1;np<=1;np++) 
+	{
+		for(int mp=-1;mp<=1;mp++) 
+		{	
+			pCyl = checkcylinders_playercollision(n+np,m+mp,candidate_point);
+			if (pCyl!=NULL) break;
+		}
+		if (pCyl!=NULL) break;
+	}
+	return pCyl;	
+}
+
+
+bool World::checkcylinders_pointcollision(int n, int m, float *candidate_point)
+{
+	wraptogrid(&n);
+	wraptogrid(&m);
+			
+	bool collide;
+	if (cylinder_collison_list[n][m].empty()) {collide = false;}
+	else 
+		for (vector<Cylinder*>::iterator iter = cylinder_collison_list[n][m].begin();
+			 iter != cylinder_collison_list[n][m].end(); ++iter) 
+		{			
+			if (collide = (*iter)->TestCollisionPoint(candidate_point)) break;
+		};
+	
+	return collide;
+}
+
+
+Cylinder* World::checkcylinders_playercollision(int n, int m, float *candidate_point)
+{
+	wraptogrid(&n);
+	wraptogrid(&m);
+	
+	bool collide;
+	Cylinder *pCyl = NULL;
+
+	if (cylinder_collison_list[n][m].empty()) collide = false;
+	else 
+		for (vector<Cylinder*>::iterator iter = cylinder_collison_list[n][m].begin();
+			 iter != cylinder_collison_list[n][m].end(); ++iter) 
+		{			
+			collide = (*iter)->TestCollisionPlayer(candidate_point);
+			if (collide) pCyl = *iter;
+			if (collide) break;
+		};
+	
+	return pCyl;
+}
+
+
+void World::WrapDomain(float *original, float *wrapped, float tes)
+{		
+	int n;	
+	for (int a=0;a<2;a++) {	
+		wrapped[a] = original[a];
+		if (original[a]>tes) 
+		{			
+			n = int(original[a]/tes);
+			wrapped[a] -= tes*(float)n;			
+		}
+		else if (original[a]<0.0) 
+		{
+			n = 1+abs(int(original[a]/tes));
+			wrapped[a] += tes*(float)n;
+		}		
+	}
+}
+
+/* test for collision between a candidate level portal and the cylinder field */
+Cylinder* World::TestCollision_PortalCylinder(float *candidate_point, float portal_length)
+{
+	float tes = terrain->getTerrainEdgeSize();
+	
+	int n = int((float)COLLISION_GRID*candidate_point[0]/tes);
+	int m = int((float)COLLISION_GRID*candidate_point[1]/tes);	
+	
+	if (n==COLLISION_GRID) n-=1;
+	if (m==COLLISION_GRID) m-=1;
+	
+	Cylinder *pCyl;
+	
+	for(int np=-1;np<=1;np++) 
+	{
+		for(int mp=-1;mp<=1;mp++) 
+		{		
+			pCyl = checkcylinders_portalcollision(n+np,m+mp,candidate_point,portal_length);
+			if (pCyl!=NULL) break;
+		}
+		if (pCyl!=NULL) break;
+	}
+	return pCyl;		
+}
+
+/* test for collision between a bullet and the cylinder field */
+Cylinder* World::TestCollision_BulletCylinder(float *candidate_point, float bulletRadius)
+{		
+	float tes = terrain->getTerrainEdgeSize();
+	
+	int n = int((float)COLLISION_GRID*candidate_point[0]/tes);
+	int m = int((float)COLLISION_GRID*candidate_point[1]/tes);	
+	
+	if (n==COLLISION_GRID) n-=1;
+	if (m==COLLISION_GRID) m-=1;
+	
+	Cylinder *pCyl;
+	
+	for(int np=-1;np<=1;np++) 
+	{
+		for(int mp=-1;mp<=1;mp++) 
+		{		
+			pCyl = checkcylinders_bulletcollision(n+np,m+mp,candidate_point,bulletRadius);
+			if (pCyl!=NULL) break;
+		}
+		if (pCyl!=NULL) break;
+	}
+	return pCyl;		
+}
+
+
+Cylinder* World::checkcylinders_portalcollision(int n, int m, float *candidate_point, float portal_length)
+{
+	wraptogrid(&n);
+	wraptogrid(&m);
+	
+	bool collide;
+	Cylinder *pCyl = NULL;
+	
+	if (cylinder_collison_list[n][m].empty()) collide = false;
+	else 
+		for (vector<Cylinder*>::iterator iter = cylinder_collison_list[n][m].begin();
+			 iter != cylinder_collison_list[n][m].end(); ++iter) 
+		{			
+			collide = (*iter)->TestCollisionPortal(candidate_point,portal_length);
+			if (collide) pCyl = *iter;
+			if (collide) break;
+		};	
+	
+	return pCyl;
+}
+
+Cylinder* World::checkcylinders_bulletcollision(int n, int m, float *candidate_point, float bulletRadius)
+{
+	wraptogrid(&n);
+	wraptogrid(&m);
+
+	bool collide;
+	Cylinder *pCyl = NULL;
+	
+	if (cylinder_collison_list[n][m].empty()) collide = false;
+	else 
+		for (vector<Cylinder*>::iterator iter = cylinder_collison_list[n][m].begin();
+			 iter != cylinder_collison_list[n][m].end(); ++iter) 
+		{			
+			collide = (*iter)->TestCollisionBullet(candidate_point,bulletRadius);
+			if (collide) pCyl = *iter;
+			if (collide) break;
+		};	
+	
+	return pCyl;
+}
+
+
+Cylinder* World::GetNearestCylinder(float *point, int *mirror_a, int *mirror_b)
+{	
+	float tes = terrain->getTerrainEdgeSize();	
+	float mindist = 2.0*tes; //TO DO: not always gonna work...
+	float dist;
+	float *cylpos;
+	float mirror[9][2];
+	
+	Cylinder *closestCyl;
+	
+	for (vector<GameObject*>::iterator iter = cylinder_field.begin();
+		 iter != cylinder_field.end(); ++iter) 
+	{
+		cylpos = (*iter)->GetPosition();
+		//construct mirror positions
+		for (int a=0;a<3;a++) 
+		{
+			for (int b=0;b<3;b++) 
+			{
+				mirror[a+3*b][0] = cylpos[0] + ((float)a-1.0)*tes;
+				mirror[a+3*b][1] = cylpos[1] + ((float)b-1.0)*tes;				
+				dist = 0.0;
+				for (int c=0;c<3;c++) 
+					dist += SQR(mirror[a+3*b][0]-point[0]) + SQR(mirror[a+3*b][1]-point[1]);
+
+				if (dist<mindist) 
+				{
+					mindist = dist;
+					closestCyl = (Cylinder*)*iter;
+					*mirror_a = a;
+					*mirror_b = b;
+				}
+			}			
+		}						
+	}
+				
+	return closestCyl;			
+}
+
+
+/* test for collision between an enemy and the cylinder field */
+Cylinder* World::TestCollision_EnemyCylinder(float *candidate_point, float enemyRadius)
+{		
+	float tes = terrain->getTerrainEdgeSize();
+	
+	int n = int((float)COLLISION_GRID*candidate_point[0]/tes);
+	int m = int((float)COLLISION_GRID*candidate_point[1]/tes);	
+	
+	if (n==COLLISION_GRID) n-=1;
+	if (m==COLLISION_GRID) m-=1;
+	
+	Cylinder *pCyl;
+	
+	for(int np=-1;np<=1;np++) 
+	{
+		for(int mp=-1;mp<=1;mp++) 
+		{		
+			pCyl = checkcylinders_enemycollision(n+np,m+mp,candidate_point,enemyRadius);
+			if (pCyl!=NULL) break;
+		}
+		if (pCyl!=NULL) break;
+	}
+	return pCyl;		
+}
+
+Cylinder* World::checkcylinders_enemycollision(int n, int m, float *candidate_point, float enemyRadius)
+{
+	wraptogrid(&n);
+	wraptogrid(&m);
+	
+	bool collide;
+	Cylinder *pCyl = NULL;
+	
+	if (cylinder_collison_list[n][m].empty()) {collide = false;}
+	else 
+	{
+		for (vector<Cylinder*>::iterator iter = cylinder_collison_list[n][m].begin();
+			 iter != cylinder_collison_list[n][m].end(); ++iter) 
+		{			
+			collide = (*iter)->TestCollisionEnemy(candidate_point,enemyRadius);
+			if (collide) pCyl = *iter;
+			if (collide) break;
+		}		
+	}
+	
+	return pCyl;
+}
+
+
+

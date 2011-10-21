@@ -1,0 +1,89 @@
+
+#ifndef WORLD_H
+#define WORLD_H
+
+#include "GameObject.h"
+#include "cylinder.h"
+#include "terrain.h"
+#include "sky.h"
+#include "Bullet.h"
+#include "Enemy.h"
+#include "Portal.h"
+
+#include <vector>
+#include <string>
+using std::string;
+using std::vector;
+
+#define COLLISION_GRID 32
+
+
+class World {
+	
+/* contains and handles objects populating the game world
+   (terrain, cylinders, bullets, enemies) */	
+	
+public:	
+	World(int level_num); //constructor
+	void Init();
+	~World(); //destructor
+	void draw();
+
+	Sky sky; 
+	Enemy enemy;
+	Terrain* terrain;
+	
+	void createPlayerBullet(float *origin, float *velocity, float *direction);
+	void createEnemyBullet(float *origin, float *velocity, float *direction);
+		
+	bool TestCollision_PointCylinder(float *candidate_point);
+	bool TestCollision_RayCylinder(float *interval_point, float *interval_end);
+	Cylinder* TestCollision_PlayerCylinder(float *candidate_point);
+	Cylinder* TestCollision_PortalCylinder(float *candidate_point, float portal_length);
+	Cylinder* TestCollision_BulletCylinder(float *candidate_point, float bulletRadius);
+	Cylinder* TestCollision_EnemyCylinder(float *candidate_point, float enemyRadius);
+	
+	Cylinder* GetNearestCylinder(float *point, int *mirror_a, int *mirror_b);
+	float GetBulletLifetime(Bullet_types bType);
+
+	void PauseTimers();
+	void UnpauseTimers();
+	
+	friend class EventManager;
+	friend class Enemy;
+
+private:
+
+	const unsigned int Ncyl, max_lod_cyl, min_lod_cyl;
+	vector<GameObject*> cylinder_field;	
+	vector<GameObject*> player_bullets;	
+	vector<GameObject*> enemy_bullets;	
+
+	/* 2d-array of vectors containing cylinders in each coarse grid cell, for fast C.D. */
+	vector<Cylinder*> cylinder_collison_list[COLLISION_GRID][COLLISION_GRID];
+	
+	void createCylinders();
+	void loadTextures();
+	inline void wraptogrid(int *np);
+	Cylinder* checkcylinders_playercollision(int n, int m, float *candidate_point);
+	bool checkcylinders_pointcollision(int n, int m, float *candidate_point);
+	bool checkcylinders_raycollision(int n, int m, 
+									 float *interval_point,
+									 float *interval_end);
+	void WrapDomain(float *original, float *wrapped, float tes);
+	Cylinder* checkcylinders_portalcollision(int n, int m, float *candidate_point, float portal_length);
+	Cylinder* checkcylinders_bulletcollision(int n, int m, float *candidate_point, float bulletRadius);
+	Cylinder* checkcylinders_enemycollision(int n, int m, float *candidate_point, float enemyRadius);
+	
+	Portal *pPortal;
+	
+	//texture names
+	string playerbullet_texture, enemybullet_texture;
+	string cylinder_texture, terrain_texture;
+	
+	int level;
+	long seed;
+
+};
+
+#endif //WORLD_H

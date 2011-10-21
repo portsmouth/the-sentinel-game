@@ -1,0 +1,116 @@
+
+
+#ifndef PLAYER_H
+#define PLAYER_H
+
+#include "world.h"
+#include "Hyperspace.h"
+#include "Timer.h"
+
+enum Player_States 
+{
+	//in level
+	PLAYER_ACTIVE, 
+	PLAYER_RESPAWNING, 
+	PLAYER_KILLED,
+	//in hyperspace
+	PLAYER_HS_ACTIVE, 
+	PLAYER_HS_FAILED,
+	PLAYER_HS_SUCCEED
+};
+
+class Player {
+	
+public:	
+	Player(); //constructor
+	~Player(); //destructor
+
+	//accessors
+	float* GetViewDirection();
+	float* GetViewPoint();
+	float* GetVelocity();
+	void GetViewAngles(float *angle, float *azimuth);
+	float GetFovy();
+	int GetLives();
+	int GetScore();
+	void ViewAtPosition(float x, float y, float angle, float azimuth, float height);
+	void ViewAtPosition_HS(float x, float y, float angle, float azimuth);
+	void SetState(Player_States newState);
+	Player_States GetState();
+	float GetHoverHeight();	
+	bool FinishedDying();
+	bool FinishedFailingHS();
+	void resetScore();
+	void addScore(int points);
+
+	//misc
+	bool TestCollisionBullet(float *candidate_point, float bulletRadius);
+	void PauseTimers();
+	void UnpauseTimers();
+	void InitObserver();
+	void InitObserver_HS();
+	void SetObserverProjection();
+	void SetObserverProjection_HS();
+	void lookat();
+	
+	//player actions
+	void Move();
+	void GoForward();
+	void GoBackward();
+	void GoLeft();
+	void GoRight();
+	
+	bool Move_HS(); //hyperspace motion
+	void GoForward_HS();
+	void GoLeft_HS();
+	void GoRight_HS();
+	
+	void RotateAboutVertical(float dAngle);
+	void RotateAboutHorizontal(float dAzimuth);
+	void kill();
+	void kill_HS();
+	bool TrytoRespawn();
+
+	//data (warning: add to list in PauseTimers() if adding a new timer)
+	Timer firedTimer;
+
+private:
+			
+	void ApplyTerrainContactForce( float* candidate_v, float dv );
+	void AttemptToMove(float *candidate_point);	
+	bool AttemptToMove_HS(float *candidate_point);	
+
+	void WrapDomain(float *point2d);
+	void initialposition();
+	void initialposition_HS();
+	
+	//observer parameters
+	float aspect_ratio,near,far,fovy;
+	float view_width,view_height;
+
+	//kinematics/dynamics
+	float viewAngle, viewAzimuth, viewHeight;
+	float view_dir[3],view_point[3],localy[3],localx[3];
+	float velocity[3], acceleration[3], thrustaccel, sidethrustaccel;
+	float maxspeed;
+	float damping_factor;
+	float coeff_restitution;
+	float view_plane[3];
+	float zaxis[3];
+	float dirCosine;
+	float gravity;
+	
+	float hover_height;
+	float terrain_edge_size;
+	World *theWorld;
+	Hyperspace *pHyperspace;
+	
+	//player game state
+	int nLives;	
+	int Score;
+	enum Player_States state;
+	//(warning: add to list in PauseTimers() and UnpauseTimers() if adding a new timer)
+	Timer shotTimer, deathTimer, shotTimer_HS, deathTimer_HS;
+};
+
+#endif //PLAYER_H
